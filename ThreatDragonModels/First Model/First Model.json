@@ -3,7 +3,11 @@
     "title": "First Model"
   },
   "detail": {
-    "contributors": [],
+    "contributors": [
+      {
+        "name": "aaron"
+      }
+    ],
     "diagrams": []
   }
 }
