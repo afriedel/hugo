@@ -1,6 +1,7 @@
 {
   "summary": {
-    "title": "test"
+    "title": "test",
+    "description": "simple description"
   },
   "detail": {
     "contributors": [],
