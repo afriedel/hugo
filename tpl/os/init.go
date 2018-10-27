@@ -14,8 +14,8 @@
 package os
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "os"
@@ -37,14 +37,21 @@ func init() {
 		ns.AddMethodMapping(ctx.ReadDir,
 			[]string{"readDir"},
 			[][2]string{
-				{`{{ range (readDir ".") }}{{ .Name }}{{ end }}`, "README.txt"},
+				{`{{ range (readDir "files") }}{{ .Name }}{{ end }}`, "README.txt"},
 			},
 		)
 
 		ns.AddMethodMapping(ctx.ReadFile,
 			[]string{"readFile"},
 			[][2]string{
-				{`{{ readFile "README.txt" }}`, `Hugo Rocks!`},
+				{`{{ readFile "files/README.txt" }}`, `Hugo Rocks!`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.FileExists,
+			[]string{"fileExists"},
+			[][2]string{
+				{`{{ fileExists "foo.txt" }}`, `false`},
 			},
 		)
 

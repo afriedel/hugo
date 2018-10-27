@@ -15,12 +15,13 @@ package lang
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
+	"github.com/gohugoio/hugo/deps"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/deps"
 )
 
 // New returns a new instance of the lang-namespaced template functions.
@@ -35,7 +36,7 @@ type Namespace struct {
 	deps *deps.Deps
 }
 
-// Translate ...
+// Translate returns a translated string for id.
 func (ns *Namespace) Translate(id interface{}, args ...interface{}) (string, error) {
 	sid, err := cast.ToStringE(id)
 	if err != nil {
@@ -66,15 +67,27 @@ func (ns *Namespace) NumFmt(precision, number interface{}, options ...interface{
 	var neg, dec, grp string
 
 	if len(options) == 0 {
-		// TODO(moorereason): move to site config
+		// defaults
 		neg, dec, grp = "-", ".", ","
 	} else {
+		delim := " "
+
+		if len(options) == 2 {
+			// custom delimiter
+			s, err := cast.ToStringE(options[1])
+			if err != nil {
+				return "", nil
+			}
+
+			delim = s
+		}
+
 		s, err := cast.ToStringE(options[0])
 		if err != nil {
 			return "", nil
 		}
 
-		rs := strings.Fields(s)
+		rs := strings.Split(s, delim)
 		switch len(rs) {
 		case 0:
 		case 1:
@@ -133,4 +146,17 @@ func (ns *Namespace) NumFmt(precision, number interface{}, options ...interface{
 	}
 
 	return string(b), nil
+}
+
+type pagesLanguageMerger interface {
+	MergeByLanguageInterface(other interface{}) (interface{}, error)
+}
+
+// Merge creates a union of pages from two languages.
+func (ns *Namespace) Merge(p2, p1 interface{}) (interface{}, error) {
+	merger, ok := p1.(pagesLanguageMerger)
+	if !ok {
+		return nil, fmt.Errorf("language merge not supported for %T", p1)
+	}
+	return merger.MergeByLanguageInterface(p2)
 }

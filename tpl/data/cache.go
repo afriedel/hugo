@@ -14,20 +14,22 @@
 package data
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
-	"net/url"
 	"sync"
 
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/helpers"
 	"github.com/spf13/afero"
-	"github.com/spf13/hugo/config"
-	"github.com/spf13/hugo/helpers"
 )
 
 var cacheMu sync.RWMutex
 
 // getCacheFileID returns the cache ID for a string.
 func getCacheFileID(cfg config.Provider, id string) string {
-	return cfg.GetString("cacheDir") + url.QueryEscape(id)
+	hash := md5.Sum([]byte(id))
+	return cfg.GetString("cacheDir") + hex.EncodeToString(hash[:])
 }
 
 // getCache returns the content for an ID from the file cache or an error.

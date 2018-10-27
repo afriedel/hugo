@@ -18,35 +18,40 @@ package tplimpl
 import (
 	"html/template"
 
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+
+	"github.com/gohugoio/hugo/tpl/internal"
 
 	// Init the namespaces
-	_ "github.com/spf13/hugo/tpl/cast"
-	_ "github.com/spf13/hugo/tpl/collections"
-	_ "github.com/spf13/hugo/tpl/compare"
-	_ "github.com/spf13/hugo/tpl/crypto"
-	_ "github.com/spf13/hugo/tpl/data"
-	_ "github.com/spf13/hugo/tpl/encoding"
-	_ "github.com/spf13/hugo/tpl/fmt"
-	_ "github.com/spf13/hugo/tpl/images"
-	_ "github.com/spf13/hugo/tpl/inflect"
-	_ "github.com/spf13/hugo/tpl/lang"
-	_ "github.com/spf13/hugo/tpl/math"
-	_ "github.com/spf13/hugo/tpl/os"
-	_ "github.com/spf13/hugo/tpl/partials"
-	_ "github.com/spf13/hugo/tpl/safe"
-	_ "github.com/spf13/hugo/tpl/strings"
-	_ "github.com/spf13/hugo/tpl/time"
-	_ "github.com/spf13/hugo/tpl/transform"
-	_ "github.com/spf13/hugo/tpl/urls"
+	_ "github.com/gohugoio/hugo/tpl/cast"
+	_ "github.com/gohugoio/hugo/tpl/collections"
+	_ "github.com/gohugoio/hugo/tpl/compare"
+	_ "github.com/gohugoio/hugo/tpl/crypto"
+	_ "github.com/gohugoio/hugo/tpl/data"
+	_ "github.com/gohugoio/hugo/tpl/encoding"
+	_ "github.com/gohugoio/hugo/tpl/fmt"
+	_ "github.com/gohugoio/hugo/tpl/images"
+	_ "github.com/gohugoio/hugo/tpl/inflect"
+	_ "github.com/gohugoio/hugo/tpl/lang"
+	_ "github.com/gohugoio/hugo/tpl/math"
+	_ "github.com/gohugoio/hugo/tpl/os"
+	_ "github.com/gohugoio/hugo/tpl/partials"
+	_ "github.com/gohugoio/hugo/tpl/path"
+	_ "github.com/gohugoio/hugo/tpl/resources"
+	_ "github.com/gohugoio/hugo/tpl/safe"
+	_ "github.com/gohugoio/hugo/tpl/strings"
+	_ "github.com/gohugoio/hugo/tpl/templates"
+	_ "github.com/gohugoio/hugo/tpl/time"
+	_ "github.com/gohugoio/hugo/tpl/transform"
+	_ "github.com/gohugoio/hugo/tpl/urls"
 )
 
-func (t *templateFuncster) initFuncMap() {
+func createFuncMap(d *deps.Deps) map[string]interface{} {
 	funcMap := template.FuncMap{}
 
 	// Merge the namespace funcs
 	for _, nsf := range internal.TemplateFuncsNamespaceRegistry {
-		ns := nsf(t.Deps)
+		ns := nsf(d)
 		if _, exists := funcMap[ns.Name]; exists {
 			panic(ns.Name + " is a duplicate template func")
 		}
@@ -60,8 +65,13 @@ func (t *templateFuncster) initFuncMap() {
 			}
 
 		}
+
 	}
 
+	return funcMap
+
+}
+func (t *templateFuncster) initFuncMap(funcMap template.FuncMap) {
 	t.funcMap = funcMap
 	t.Tmpl.(*templateHandler).setFuncs(funcMap)
 }

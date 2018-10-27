@@ -19,8 +19,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gohugoio/hugo/tpl/compare"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/tpl/compare"
 )
 
 var comp = compare.New()

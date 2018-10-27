@@ -14,8 +14,8 @@
 package strings
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "strings"
@@ -32,12 +32,17 @@ func init() {
 		ns.AddMethodMapping(ctx.Chomp,
 			[]string{"chomp"},
 			[][2]string{
-				{`{{chomp "<p>Blockhead</p>\n" }}`, `<p>Blockhead</p>`},
+				{`{{chomp "<p>Blockhead</p>\n" | safeHTML }}`, `<p>Blockhead</p>`},
 			},
 		)
 
 		ns.AddMethodMapping(ctx.CountRunes,
 			[]string{"countrunes"},
+			[][2]string{},
+		)
+
+		ns.AddMethodMapping(ctx.RuneCount,
+			nil,
 			[][2]string{},
 		)
 
@@ -112,10 +117,48 @@ func init() {
 			},
 		)
 
+		ns.AddMethodMapping(ctx.TrimLeft,
+			nil,
+			[][2]string{
+				{`{{ "aabbaa" | strings.TrimLeft "a" }}`, `bbaa`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.TrimPrefix,
+			nil,
+			[][2]string{
+				{`{{ "aabbaa" | strings.TrimPrefix "a" }}`, `abbaa`},
+				{`{{ "aabbaa" | strings.TrimPrefix "aa" }}`, `bbaa`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.TrimRight,
+			nil,
+			[][2]string{
+				{`{{ "aabbaa" | strings.TrimRight "a" }}`, `aabb`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.TrimSuffix,
+			nil,
+			[][2]string{
+				{`{{ "aabbaa" | strings.TrimSuffix "a" }}`, `aabba`},
+				{`{{ "aabbaa" | strings.TrimSuffix "aa" }}`, `aabb`},
+			},
+		)
+
 		ns.AddMethodMapping(ctx.Title,
 			[]string{"title"},
 			[][2]string{
 				{`{{title "Bat man"}}`, `Bat Man`},
+				{`{{title "somewhere over the rainbow"}}`, `Somewhere Over the Rainbow`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.FirstUpper,
+			nil,
+			[][2]string{
+				{`{{ "hugo rocks!" | strings.FirstUpper }}`, `Hugo rocks!`},
 			},
 		)
 
@@ -124,6 +167,13 @@ func init() {
 			[][2]string{
 				{`{{ "this is a very long text" | truncate 10 " ..." }}`, `this is a ...`},
 				{`{{ "With [Markdown](/markdown) inside." | markdownify | truncate 14 }}`, `With <a href="/markdown">Markdown …</a>`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Repeat,
+			nil,
+			[][2]string{
+				{`{{ "yo" | strings.Repeat 4 }}`, `yoyoyoyo`},
 			},
 		)
 

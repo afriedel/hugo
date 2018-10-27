@@ -21,15 +21,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetCSV(t *testing.T) {
 	t.Parallel()
-
-	ns := New(newDeps(viper.New()))
 
 	for i, test := range []struct {
 		sep     string
@@ -79,6 +76,8 @@ func TestGetCSV(t *testing.T) {
 	} {
 		msg := fmt.Sprintf("Test %d", i)
 
+		ns := newTestNs()
+
 		// Setup HTTP test server
 		var srv *httptest.Server
 		srv, ns.client = getTestServer(func(w http.ResponseWriter, r *http.Request) {
@@ -110,10 +109,13 @@ func TestGetCSV(t *testing.T) {
 		got, err := ns.GetCSV(test.sep, test.url)
 
 		if _, ok := test.expect.(bool); ok {
-			assert.Error(t, err, msg)
+			require.Error(t, err, msg)
+			require.Nil(t, got)
 			continue
 		}
+
 		require.NoError(t, err, msg)
+		require.Equal(t, 0, int(ns.deps.Log.ErrorCounter.Count()))
 		require.NotNil(t, got, msg)
 
 		assert.EqualValues(t, test.expect, got, msg)
@@ -122,8 +124,6 @@ func TestGetCSV(t *testing.T) {
 
 func TestGetJSON(t *testing.T) {
 	t.Parallel()
-
-	ns := New(newDeps(viper.New()))
 
 	for i, test := range []struct {
 		url     string
@@ -157,7 +157,9 @@ func TestGetJSON(t *testing.T) {
 			false,
 		},
 	} {
+
 		msg := fmt.Sprintf("Test %d", i)
+		ns := newTestNs()
 
 		// Setup HTTP test server
 		var srv *httptest.Server
@@ -190,10 +192,11 @@ func TestGetJSON(t *testing.T) {
 		got, err := ns.GetJSON(test.url)
 
 		if _, ok := test.expect.(bool); ok {
-			assert.Error(t, err, msg)
+			require.Error(t, err, msg)
 			continue
 		}
-		require.NoError(t, err, msg)
+
+		require.Equal(t, 0, int(ns.deps.Log.ErrorCounter.Count()), msg)
 		require.NotNil(t, got, msg)
 
 		assert.EqualValues(t, test.expect, got, msg)

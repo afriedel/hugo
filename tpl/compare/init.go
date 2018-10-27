@@ -14,8 +14,8 @@
 package compare
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "compare"
@@ -46,7 +46,9 @@ func init() {
 
 		ns.AddMethodMapping(ctx.Ge,
 			[]string{"ge"},
-			[][2]string{},
+			[][2]string{
+				{`{{ if ge .Hugo.Version "0.36" }}Reasonable new Hugo version!{{ end }}`, `Reasonable new Hugo version!`},
+			},
 		)
 
 		ns.AddMethodMapping(ctx.Gt,
@@ -67,6 +69,13 @@ func init() {
 		ns.AddMethodMapping(ctx.Ne,
 			[]string{"ne"},
 			[][2]string{},
+		)
+
+		ns.AddMethodMapping(ctx.Conditional,
+			[]string{"cond"},
+			[][2]string{
+				{`{{ cond (eq (add 2 2) 4) "2+2 is 4" "what?" | safeHTML }}`, `2+2 is 4`},
+			},
 		)
 
 		return ns

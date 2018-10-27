@@ -14,27 +14,34 @@
 package tplimpl
 
 import (
-	"github.com/spf13/hugo/deps"
+	"github.com/gohugoio/hugo/deps"
 )
 
+// TemplateProvider manages templates.
 type TemplateProvider struct{}
 
+// DefaultTemplateProvider is a globally available TemplateProvider.
 var DefaultTemplateProvider *TemplateProvider
 
-// Update updates the Hugo Template System in the provided Deps.
-// with all the additional features, templates & functions
+// Update updates the Hugo Template System in the provided Deps
+// with all the additional features, templates & functions.
 func (*TemplateProvider) Update(deps *deps.Deps) error {
 
 	newTmpl := newTemplateAdapter(deps)
 	deps.Tmpl = newTmpl
 
+	deps.TextTmpl = newTmpl.NewTextTemplate()
+
 	newTmpl.initFuncs()
-	newTmpl.loadEmbedded()
+
+	if err := newTmpl.loadEmbedded(); err != nil {
+		return err
+	}
 
 	if deps.WithTemplate != nil {
 		err := deps.WithTemplate(newTmpl)
 		if err != nil {
-			newTmpl.addError("init", err)
+			return err
 		}
 
 	}

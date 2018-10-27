@@ -15,60 +15,31 @@ package helpers
 
 import (
 	"bytes"
-	"html"
+	"strings"
 
+	"github.com/gohugoio/hugo/config"
 	"github.com/miekg/mmark"
 	"github.com/russross/blackfriday"
-	"github.com/spf13/hugo/config"
-	jww "github.com/spf13/jwalterweatherman"
 )
-
-type LinkResolverFunc func(ref string) (string, error)
-type FileResolverFunc func(ref string) (string, error)
 
 // HugoHTMLRenderer wraps a blackfriday.Renderer, typically a blackfriday.Html
 // Enabling Hugo to customise the rendering experience
 type HugoHTMLRenderer struct {
+	cs *ContentSpec
 	*RenderingContext
 	blackfriday.Renderer
 }
 
+// BlockCode renders a given text as a block of code.
+// Pygments is used if it is setup to handle code fences.
 func (r *HugoHTMLRenderer) BlockCode(out *bytes.Buffer, text []byte, lang string) {
 	if r.Cfg.GetBool("pygmentsCodeFences") && (lang != "" || r.Cfg.GetBool("pygmentsCodeFencesGuessSyntax")) {
 		opts := r.Cfg.GetString("pygmentsOptions")
-		str := html.UnescapeString(string(text))
-		out.WriteString(Highlight(r.RenderingContext.Cfg, str, lang, opts))
+		str := strings.Trim(string(text), "\n\r")
+		highlighted, _ := r.cs.Highlight(str, lang, opts)
+		out.WriteString(highlighted)
 	} else {
 		r.Renderer.BlockCode(out, text, lang)
-	}
-}
-
-func (r *HugoHTMLRenderer) Link(out *bytes.Buffer, link []byte, title []byte, content []byte) {
-	if r.LinkResolver == nil || bytes.HasPrefix(link, []byte("HAHAHUGOSHORTCODE")) {
-		// Use the blackfriday built in Link handler
-		r.Renderer.Link(out, link, title, content)
-	} else {
-		// set by SourceRelativeLinksEval
-		newLink, err := r.LinkResolver(string(link))
-		if err != nil {
-			newLink = string(link)
-			jww.ERROR.Printf("LinkResolver: %s", err)
-		}
-		r.Renderer.Link(out, []byte(newLink), title, content)
-	}
-}
-func (r *HugoHTMLRenderer) Image(out *bytes.Buffer, link []byte, title []byte, alt []byte) {
-	if r.FileResolver == nil || bytes.HasPrefix(link, []byte("HAHAHUGOSHORTCODE")) {
-		// Use the blackfriday built in Image handler
-		r.Renderer.Image(out, link, title, alt)
-	} else {
-		// set by SourceRelativeLinksEval
-		newLink, err := r.FileResolver(string(link))
-		if err != nil {
-			newLink = string(link)
-			jww.ERROR.Printf("FileResolver: %s", err)
-		}
-		r.Renderer.Image(out, []byte(newLink), title, alt)
 	}
 }
 
@@ -81,10 +52,12 @@ func (r *HugoHTMLRenderer) ListItem(out *bytes.Buffer, text []byte, flags int) {
 
 	switch {
 	case bytes.HasPrefix(text, []byte("[ ] ")):
-		text = append([]byte(`<input type="checkbox" disabled class="task-list-item">`), text[3:]...)
+		text = append([]byte(`<label><input type="checkbox" disabled class="task-list-item">`), text[3:]...)
+		text = append(text, []byte(`</label>`)...)
 
 	case bytes.HasPrefix(text, []byte("[x] ")) || bytes.HasPrefix(text, []byte("[X] ")):
-		text = append([]byte(`<input type="checkbox" checked disabled class="task-list-item">`), text[3:]...)
+		text = append([]byte(`<label><input type="checkbox" checked disabled class="task-list-item">`), text[3:]...)
+		text = append(text, []byte(`</label>`)...)
 	}
 
 	r.Renderer.ListItem(out, text, flags)
@@ -101,26 +74,34 @@ func (r *HugoHTMLRenderer) List(out *bytes.Buffer, text func() bool, flags int) 
 	if out.Len() > marker {
 		list := out.Bytes()[marker:]
 		if bytes.Contains(list, []byte("task-list-item")) {
+			// Find the index of the first >, it might be 3 or 4 depending on whether
+			// there is a new line at the start, but this is safer than just hardcoding it.
+			closingBracketIndex := bytes.Index(list, []byte(">"))
 			// Rewrite the buffer from the marker
 			out.Truncate(marker)
+			// Safely assuming closingBracketIndex won't be -1 since there is a list
 			// May be either dl, ul or ol
-			list := append(list[:4], append([]byte(` class="task-list"`), list[4:]...)...)
+			list := append(list[:closingBracketIndex], append([]byte(` class="task-list"`), list[closingBracketIndex:]...)...)
 			out.Write(list)
 		}
 	}
 }
 
-// HugoMmarkHTMLRenderer wraps a mmark.Renderer, typically a mmark.html
-// Enabling Hugo to customise the rendering experience
+// HugoMmarkHTMLRenderer wraps a mmark.Renderer, typically a mmark.html,
+// enabling Hugo to customise the rendering experience.
 type HugoMmarkHTMLRenderer struct {
+	cs *ContentSpec
 	mmark.Renderer
 	Cfg config.Provider
 }
 
+// BlockCode renders a given text as a block of code.
+// Pygments is used if it is setup to handle code fences.
 func (r *HugoMmarkHTMLRenderer) BlockCode(out *bytes.Buffer, text []byte, lang string, caption []byte, subfigure bool, callouts bool) {
 	if r.Cfg.GetBool("pygmentsCodeFences") && (lang != "" || r.Cfg.GetBool("pygmentsCodeFencesGuessSyntax")) {
-		str := html.UnescapeString(string(text))
-		out.WriteString(Highlight(r.Cfg, str, lang, ""))
+		str := strings.Trim(string(text), "\n\r")
+		highlighted, _ := r.cs.Highlight(str, lang, "")
+		out.WriteString(highlighted)
 	} else {
 		r.Renderer.BlockCode(out, text, lang, caption, subfigure, callouts)
 	}

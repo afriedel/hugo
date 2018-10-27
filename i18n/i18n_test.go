@@ -14,21 +14,24 @@
 package i18n
 
 import (
+	"path/filepath"
 	"testing"
 
-	"io/ioutil"
-	"os"
+	"github.com/gohugoio/hugo/tpl/tplimpl"
 
-	"log"
+	"github.com/gohugoio/hugo/common/loggers"
+	"github.com/gohugoio/hugo/langs"
+	"github.com/spf13/afero"
 
-	"github.com/nicksnyder/go-i18n/i18n/bundle"
-	"github.com/spf13/hugo/config"
-	jww "github.com/spf13/jwalterweatherman"
+	"github.com/gohugoio/hugo/deps"
+
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/hugofs"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
-var logger = jww.NewNotepad(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, "", log.Ldate|log.Ltime)
+var logger = loggers.NewErrorLogger()
 
 type i18nTest struct {
 	data                             map[string][]byte
@@ -113,7 +116,7 @@ var i18nTests = []i18nTest{
 		expectedFlag: "¡Hola, 50 gente!",
 	},
 	// Same id and translation in current language
-	// https://github.com/spf13/hugo/issues/2607
+	// https://github.com/gohugoio/hugo/issues/2607
 	{
 		data: map[string][]byte{
 			"es.toml": []byte("[hello]\nother = \"hello\""),
@@ -137,28 +140,69 @@ var i18nTests = []i18nTest{
 		expected:     "hello",
 		expectedFlag: "[i18n] hello",
 	},
+	// Unknown language code should get its plural spec from en
+	{
+		data: map[string][]byte{
+			"en.toml": []byte(`[readingTime]
+one ="one minute read"
+other = "{{.Count}} minutes read"`),
+			"klingon.toml": []byte(`[readingTime]
+one =  "eitt minutt med lesing"
+other = "{{ .Count }} minuttar lesing"`),
+		},
+		args:         3,
+		lang:         "klingon",
+		id:           "readingTime",
+		expected:     "3 minuttar lesing",
+		expectedFlag: "3 minuttar lesing",
+	},
 }
 
 func doTestI18nTranslate(t *testing.T, test i18nTest, cfg config.Provider) string {
-	i18nBundle := bundle.New()
+	assert := require.New(t)
+	fs := hugofs.NewMem(cfg)
+	tp := NewTranslationProvider()
 
 	for file, content := range test.data {
-		err := i18nBundle.ParseTranslationFileBytes(file, content)
-		if err != nil {
-			t.Errorf("Error parsing translation file: %s", err)
-		}
+		err := afero.WriteFile(fs.Source, filepath.Join("i18n", file), []byte(content), 0755)
+		assert.NoError(err)
 	}
 
-	translator := NewTranslator(i18nBundle, cfg, logger)
-	f := translator.Func(test.lang)
-	translated := f(test.id, test.args)
-	return translated
+	depsCfg := newDepsConfig(tp, cfg, fs)
+	d, err := deps.New(depsCfg)
+	assert.NoError(err)
+
+	assert.NoError(d.LoadResources())
+	f := tp.t.Func(test.lang)
+	return f(test.id, test.args)
+
+}
+
+func newDepsConfig(tp *TranslationProvider, cfg config.Provider, fs *hugofs.Fs) deps.DepsCfg {
+	l := langs.NewLanguage("en", cfg)
+	l.Set("i18nDir", "i18n")
+	return deps.DepsCfg{
+		Language:            l,
+		Cfg:                 cfg,
+		Fs:                  fs,
+		Logger:              logger,
+		TemplateProvider:    tplimpl.DefaultTemplateProvider,
+		TranslationProvider: tp,
+	}
 }
 
 func TestI18nTranslate(t *testing.T) {
 	var actual, expected string
 	v := viper.New()
 	v.SetDefault("defaultContentLanguage", "en")
+	v.Set("contentDir", "content")
+	v.Set("dataDir", "data")
+	v.Set("i18nDir", "i18n")
+	v.Set("layoutDir", "layouts")
+	v.Set("archetypeDir", "archetypes")
+	v.Set("assetDir", "assets")
+	v.Set("resourceDir", "resources")
+	v.Set("publishDir", "public")
 
 	// Test without and with placeholders
 	for _, enablePlaceholders := range []bool{false, true} {

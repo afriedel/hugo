@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/spf13/hugo/media"
+	"github.com/gohugoio/hugo/media"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,6 +91,45 @@ func TestGetFormatByExt(t *testing.T) {
 	require.False(t, found)
 }
 
+func TestGetFormatByFilename(t *testing.T) {
+	noExtNoDelimMediaType := media.TextType
+	noExtNoDelimMediaType.Delimiter = ""
+
+	noExtMediaType := media.TextType
+
+	var (
+		noExtDelimFormat = Format{
+			Name:      "NEM",
+			MediaType: noExtNoDelimMediaType,
+			BaseName:  "_redirects",
+		}
+		noExt = Format{
+			Name:      "NEX",
+			MediaType: noExtMediaType,
+			BaseName:  "next",
+		}
+	)
+
+	formats := Formats{AMPFormat, HTMLFormat, noExtDelimFormat, noExt, CalendarFormat}
+	f, found := formats.FromFilename("my.amp.html")
+	require.True(t, found)
+	require.Equal(t, AMPFormat, f)
+	f, found = formats.FromFilename("my.ics")
+	require.True(t, found)
+	f, found = formats.FromFilename("my.html")
+	require.True(t, found)
+	require.Equal(t, HTMLFormat, f)
+	f, found = formats.FromFilename("my.nem")
+	require.True(t, found)
+	require.Equal(t, noExtDelimFormat, f)
+	f, found = formats.FromFilename("my.nex")
+	require.True(t, found)
+	require.Equal(t, noExt, f)
+	_, found = formats.FromFilename("my.css")
+	require.False(t, found)
+
+}
+
 func TestDecodeFormats(t *testing.T) {
 
 	mediaTypes := media.Types{media.JSONType, media.XMLType}
@@ -104,7 +143,7 @@ func TestDecodeFormats(t *testing.T) {
 		{
 			"Redefine JSON",
 			[]map[string]interface{}{
-				map[string]interface{}{
+				{
 					"JsON": map[string]interface{}{
 						"baseName":    "myindex",
 						"isPlainText": "false"}}},
@@ -120,7 +159,7 @@ func TestDecodeFormats(t *testing.T) {
 		{
 			"Add XML format with string as mediatype",
 			[]map[string]interface{}{
-				map[string]interface{}{
+				{
 					"MYXMLFORMAT": map[string]interface{}{
 						"baseName":  "myxml",
 						"mediaType": "application/xml",
@@ -141,7 +180,7 @@ func TestDecodeFormats(t *testing.T) {
 		{
 			"Add format unknown mediatype",
 			[]map[string]interface{}{
-				map[string]interface{}{
+				{
 					"MYINVALID": map[string]interface{}{
 						"baseName":  "mymy",
 						"mediaType": "application/hugo",
@@ -153,12 +192,12 @@ func TestDecodeFormats(t *testing.T) {
 		{
 			"Add and redefine XML format",
 			[]map[string]interface{}{
-				map[string]interface{}{
+				{
 					"MYOTHERXMLFORMAT": map[string]interface{}{
 						"baseName":  "myotherxml",
 						"mediaType": media.XMLType,
 					}},
-				map[string]interface{}{
+				{
 					"MYOTHERXMLFORMAT": map[string]interface{}{
 						"baseName": "myredefined",
 					}},

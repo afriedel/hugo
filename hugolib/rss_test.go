@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/hugo/deps"
+	"github.com/gohugoio/hugo/deps"
 )
 
 func TestRSSOutput(t *testing.T) {
@@ -30,15 +30,14 @@ func TestRSSOutput(t *testing.T) {
 
 	rssLimit := len(weightedSources) - 1
 
-	rssURI := "customrss.xml"
+	rssURI := "index.xml"
 
 	cfg.Set("baseURL", "http://auth/bub/")
-	cfg.Set("rssURI", rssURI)
 	cfg.Set("title", "RSSTest")
 	cfg.Set("rssLimit", rssLimit)
 
 	for _, src := range weightedSources {
-		writeSource(t, fs, filepath.Join("content", "sect", src.Name), string(src.Content))
+		writeSource(t, fs, filepath.Join("content", "sect", src[0]), src[1])
 	}
 
 	buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
@@ -56,4 +55,22 @@ func TestRSSOutput(t *testing.T) {
 	if c != rssLimit {
 		t.Errorf("incorrect RSS item count: expected %d, got %d", rssLimit, c)
 	}
+}
+
+// Before Hugo 0.49 we set the pseudo page kind RSS on the page when output to RSS.
+// This had some unintended side effects, esp. when the only output format for that page
+// was RSS.
+// For the page kinds that can have multiple output formats, the Kind should be one of the
+// standard home, page etc.
+// This test has this single purpose: Check that the Kind is that of the source page.
+// See https://github.com/gohugoio/hugo/issues/5138
+func TestRSSKind(t *testing.T) {
+	t.Parallel()
+
+	b := newTestSitesBuilder(t)
+	b.WithSimpleConfigFile().WithTemplatesAdded("index.rss.xml", `RSS Kind: {{ .Kind }}`)
+
+	b.Build(BuildCfg{})
+
+	b.AssertFileContent("public/index.xml", "RSS Kind: home")
 }

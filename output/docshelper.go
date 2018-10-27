@@ -3,9 +3,9 @@ package output
 import (
 	"strings"
 
-	"fmt"
+	//	"fmt"
 
-	"github.com/spf13/hugo/docshelper"
+	"github.com/gohugoio/hugo/docshelper"
 )
 
 // This is is just some helpers used to create some JSON used in the Hugo docs.
@@ -25,6 +25,7 @@ func createLayoutExamples() interface{} {
 
 	type Example struct {
 		Example      string
+		Kind         string
 		OutputFormat string
 		Suffix       string
 		Layouts      []string `json:"Template Lookup Order"`
@@ -37,30 +38,41 @@ func createLayoutExamples() interface{} {
 	)
 
 	for _, example := range []struct {
-		name           string
-		d              LayoutDescriptor
-		hasTheme       bool
-		layoutOverride string
-		f              Format
+		name string
+		d    LayoutDescriptor
+		f    Format
 	}{
-		{`AMP home, with theme "demoTheme".`, LayoutDescriptor{Kind: "home"}, true, "", AMPFormat},
-		{"JSON home, no theme.", LayoutDescriptor{Kind: "home"}, false, "", JSONFormat},
-		{fmt.Sprintf(`CSV regular, "layout: %s" in front matter.`, demoLayout), LayoutDescriptor{Kind: "page", Layout: demoLayout}, false, "", CSVFormat},
-		{fmt.Sprintf(`JSON regular, "type: %s" in front matter.`, demoType), LayoutDescriptor{Kind: "page", Type: demoType}, false, "", JSONFormat},
-		{"HTML regular.", LayoutDescriptor{Kind: "page"}, false, "", HTMLFormat},
-		{"AMP regular.", LayoutDescriptor{Kind: "page"}, false, "", AMPFormat},
-		{"Calendar blog section.", LayoutDescriptor{Kind: "section", Section: "blog"}, false, "", CalendarFormat},
-		{"Calendar taxonomy list.", LayoutDescriptor{Kind: "taxonomy", Section: "tag"}, false, "", CalendarFormat},
-		{"Calendar taxonomy term.", LayoutDescriptor{Kind: "taxonomyTerm", Section: "tag"}, false, "", CalendarFormat},
+		// Taxonomy output.LayoutDescriptor={categories category taxonomy en  false Type Section
+		{"Single page in \"posts\" section", LayoutDescriptor{Kind: "page", Type: "posts"}, HTMLFormat},
+		{"Single page in \"posts\" section with layout set", LayoutDescriptor{Kind: "page", Type: "posts", Layout: demoLayout}, HTMLFormat},
+		{"AMP single page", LayoutDescriptor{Kind: "page", Type: "posts"}, AMPFormat},
+		{"AMP single page, French language", LayoutDescriptor{Kind: "page", Type: "posts", Lang: "fr"}, AMPFormat},
+		// All section or typeless pages gets "page" as type
+		{"Home page", LayoutDescriptor{Kind: "home", Type: "page"}, HTMLFormat},
+		{"Home page with type set", LayoutDescriptor{Kind: "home", Type: demoType}, HTMLFormat},
+		{"Home page with layout set", LayoutDescriptor{Kind: "home", Type: "page", Layout: demoLayout}, HTMLFormat},
+		{`AMP home, French language"`, LayoutDescriptor{Kind: "home", Type: "page", Lang: "fr"}, AMPFormat},
+		{"JSON home", LayoutDescriptor{Kind: "home", Type: "page"}, JSONFormat},
+		{"RSS home", LayoutDescriptor{Kind: "home", Type: "page"}, RSSFormat},
+		{"RSS section posts", LayoutDescriptor{Kind: "section", Type: "posts"}, RSSFormat},
+		{"Taxonomy list in categories", LayoutDescriptor{Kind: "taxonomy", Type: "categories", Section: "category"}, RSSFormat},
+		{"Taxonomy terms in categories", LayoutDescriptor{Kind: "taxonomyTerm", Type: "categories", Section: "category"}, RSSFormat},
+		{"Section list for \"posts\" section", LayoutDescriptor{Kind: "section", Type: "posts", Section: "posts"}, HTMLFormat},
+		{"Section list for \"posts\" section with type set to \"blog\"", LayoutDescriptor{Kind: "section", Type: "blog", Section: "posts"}, HTMLFormat},
+		{"Section list for \"posts\" section with layout set to \"demoLayout\"", LayoutDescriptor{Kind: "section", Layout: demoLayout, Section: "posts"}, HTMLFormat},
+
+		{"Taxonomy list in categories", LayoutDescriptor{Kind: "taxonomy", Type: "categories", Section: "category"}, HTMLFormat},
+		{"Taxonomy term in categories", LayoutDescriptor{Kind: "taxonomyTerm", Type: "categories", Section: "category"}, HTMLFormat},
 	} {
 
-		l := NewLayoutHandler(example.hasTheme)
-		layouts, _ := l.For(example.d, example.layoutOverride, example.f)
+		l := NewLayoutHandler()
+		layouts, _ := l.For(example.d, example.f)
 
 		basicExamples = append(basicExamples, Example{
 			Example:      example.name,
+			Kind:         example.d.Kind,
 			OutputFormat: example.f.Name,
-			Suffix:       example.f.MediaType.Suffix,
+			Suffix:       example.f.MediaType.Suffix(),
 			Layouts:      makeLayoutsPresentable(layouts)})
 	}
 
@@ -71,12 +83,12 @@ func createLayoutExamples() interface{} {
 func makeLayoutsPresentable(l []string) []string {
 	var filtered []string
 	for _, ll := range l {
-		ll = strings.TrimPrefix(ll, "_text/")
-		if strings.Contains(ll, "theme/") {
-			ll = strings.Replace(ll, "theme/", "demoTheme/layouts/", -1)
-		} else {
-			ll = "layouts/" + ll
+		if strings.Contains(ll, "page/") {
+			// This is a valid lookup, but it's more confusing than useful.
+			continue
 		}
+		ll = "layouts/" + strings.TrimPrefix(ll, "_text/")
+
 		if !strings.Contains(ll, "indexes") {
 			filtered = append(filtered, ll)
 		}

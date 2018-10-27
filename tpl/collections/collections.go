@@ -1,4 +1,4 @@
-// Copyright 2017 The Hugo Authors. All rights reserved.
+// Copyright 2018 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,10 +23,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gohugoio/hugo/common/collections"
+	"github.com/gohugoio/hugo/common/maps"
+	"github.com/gohugoio/hugo/common/types"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/helpers"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/helpers"
 )
+
+func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
+}
 
 // New returns a new instance of the collections-namespaced template functions.
 func New(deps *deps.Deps) *Namespace {
@@ -69,7 +76,7 @@ func (ns *Namespace) After(index interface{}, seq interface{}) (interface{}, err
 	}
 
 	if indexv >= seqv.Len() {
-		return nil, errors.New("no items left")
+		return seqv.Slice(0, 0).Interface(), nil
 	}
 
 	return seqv.Slice(indexv, seqv.Len()).Interface(), nil
@@ -208,8 +215,8 @@ func (ns *Namespace) First(limit interface{}, seq interface{}) (interface{}, err
 		return nil, err
 	}
 
-	if limitv < 1 {
-		return nil, errors.New("can't return negative/empty count of items from sequence")
+	if limitv < 0 {
+		return nil, errors.New("can't return negative count of items from sequence")
 	}
 
 	seqv := reflect.ValueOf(seq)
@@ -254,17 +261,11 @@ func (ns *Namespace) In(l interface{}, v interface{}) bool {
 				if vv.Type() == lvv.Type() && vv.String() == lvv.String() {
 					return true
 				}
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				switch vv.Kind() {
-				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-					if vv.Int() == lvv.Int() {
-						return true
-					}
-				}
-			case reflect.Float32, reflect.Float64:
-				switch vv.Kind() {
-				case reflect.Float32, reflect.Float64:
-					if vv.Float() == lvv.Float() {
+			default:
+				if isNumber(vv.Kind()) && isNumber(lvv.Kind()) {
+					f1, err1 := numberToFloat(vv)
+					f2, err2 := numberToFloat(lvv)
+					if err1 == nil && err2 == nil && f1 == f2 {
 						return true
 					}
 				}
@@ -285,75 +286,54 @@ func (ns *Namespace) Intersect(l1, l2 interface{}) (interface{}, error) {
 		return make([]interface{}, 0), nil
 	}
 
+	var ins *intersector
+
 	l1v := reflect.ValueOf(l1)
 	l2v := reflect.ValueOf(l2)
 
 	switch l1v.Kind() {
 	case reflect.Array, reflect.Slice:
+		ins = &intersector{r: reflect.MakeSlice(l1v.Type(), 0, 0), seen: make(map[interface{}]bool)}
 		switch l2v.Kind() {
 		case reflect.Array, reflect.Slice:
-			r := reflect.MakeSlice(l1v.Type(), 0, 0)
 			for i := 0; i < l1v.Len(); i++ {
 				l1vv := l1v.Index(i)
+				if !l1vv.Type().Comparable() {
+					return make([]interface{}, 0), errors.New("intersect does not support slices or arrays of uncomparable types")
+				}
+
 				for j := 0; j < l2v.Len(); j++ {
 					l2vv := l2v.Index(j)
-					switch l1vv.Kind() {
-					case reflect.String:
-						l2t, err := toString(l2vv)
-						if err == nil && l1vv.String() == l2t && !ns.In(r.Interface(), l1vv.Interface()) {
-							r = reflect.Append(r, l1vv)
-						}
-					case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-						l2t, err := toInt(l2vv)
-						if err == nil && l1vv.Int() == l2t && !ns.In(r.Interface(), l1vv.Interface()) {
-							r = reflect.Append(r, l1vv)
-						}
-					case reflect.Float32, reflect.Float64:
-						l2t, err := toFloat(l2vv)
-						if err == nil && l1vv.Float() == l2t && !ns.In(r.Interface(), l1vv.Interface()) {
-							r = reflect.Append(r, l1vv)
-						}
-					case reflect.Interface:
-						switch l1vvActual := l1vv.Interface().(type) {
-						case string:
-							switch l2vvActual := l2vv.Interface().(type) {
-							case string:
-								if l1vvActual == l2vvActual && !ns.In(r.Interface(), l1vvActual) {
-									r = reflect.Append(r, l1vv)
-								}
-							}
-						case int, int8, int16, int32, int64:
-							switch l2vvActual := l2vv.Interface().(type) {
-							case int, int8, int16, int32, int64:
-								if l1vvActual == l2vvActual && !ns.In(r.Interface(), l1vvActual) {
-									r = reflect.Append(r, l1vv)
-								}
-							}
-						case uint, uint8, uint16, uint32, uint64:
-							switch l2vvActual := l2vv.Interface().(type) {
-							case uint, uint8, uint16, uint32, uint64:
-								if l1vvActual == l2vvActual && !ns.In(r.Interface(), l1vvActual) {
-									r = reflect.Append(r, l1vv)
-								}
-							}
-						case float32, float64:
-							switch l2vvActual := l2vv.Interface().(type) {
-							case float32, float64:
-								if l1vvActual == l2vvActual && !ns.In(r.Interface(), l1vvActual) {
-									r = reflect.Append(r, l1vv)
-								}
-							}
-						}
+					if !l2vv.Type().Comparable() {
+						return make([]interface{}, 0), errors.New("intersect does not support slices or arrays of uncomparable types")
 					}
+
+					ins.handleValuePair(l1vv, l2vv)
 				}
 			}
-			return r.Interface(), nil
+			return ins.r.Interface(), nil
 		default:
 			return nil, errors.New("can't iterate over " + reflect.ValueOf(l2).Type().String())
 		}
 	default:
 		return nil, errors.New("can't iterate over " + reflect.ValueOf(l1).Type().String())
 	}
+}
+
+// Group groups a set of elements by the given key.
+// This is currently only supported for Pages.
+func (ns *Namespace) Group(key interface{}, items interface{}) (interface{}, error) {
+	if key == nil {
+		return nil, errors.New("nil is not a valid key to group by")
+	}
+
+	in := newSliceElement(items)
+
+	if g, ok := in.(collections.Grouper); ok {
+		return g.Group(key, items)
+	}
+
+	return nil, fmt.Errorf("grouping not supported for type %T", items)
 }
 
 // IsSet returns whether a given array, channel, slice, or map has a key
@@ -364,7 +344,11 @@ func (ns *Namespace) IsSet(a interface{}, key interface{}) (bool, error) {
 
 	switch av.Kind() {
 	case reflect.Array, reflect.Chan, reflect.Slice:
-		if int64(av.Len()) > kv.Int() {
+		k, err := cast.ToIntE(key)
+		if err != nil {
+			return false, fmt.Errorf("isset unable to use key of type %T as index", key)
+		}
+		if av.Len() > k {
 			return true, nil
 		}
 	case reflect.Map:
@@ -524,7 +508,6 @@ func (ns *Namespace) Shuffle(seq interface{}) (interface{}, error) {
 
 	shuffled := reflect.MakeSlice(reflect.TypeOf(seq), seqv.Len(), seqv.Len())
 
-	rand.Seed(time.Now().UTC().UnixNano())
 	randomIndices := rand.Perm(seqv.Len())
 
 	for index, value := range randomIndices {
@@ -535,8 +518,48 @@ func (ns *Namespace) Shuffle(seq interface{}) (interface{}, error) {
 }
 
 // Slice returns a slice of all passed arguments.
-func (ns *Namespace) Slice(args ...interface{}) []interface{} {
-	return args
+func (ns *Namespace) Slice(args ...interface{}) interface{} {
+	if len(args) == 0 {
+		return args
+	}
+
+	return collections.Slice(args...)
+}
+
+type intersector struct {
+	r    reflect.Value
+	seen map[interface{}]bool
+}
+
+func (i *intersector) appendIfNotSeen(v reflect.Value) {
+
+	vi := v.Interface()
+	if !i.seen[vi] {
+		i.r = reflect.Append(i.r, v)
+		i.seen[vi] = true
+	}
+}
+
+func (i *intersector) handleValuePair(l1vv, l2vv reflect.Value) {
+	switch kind := l1vv.Kind(); {
+	case kind == reflect.String:
+		l2t, err := toString(l2vv)
+		if err == nil && l1vv.String() == l2t {
+			i.appendIfNotSeen(l1vv)
+		}
+	case isNumber(kind):
+		f1, err1 := numberToFloat(l1vv)
+		f2, err2 := numberToFloat(l2vv)
+		if err1 == nil && err2 == nil && f1 == f2 {
+			i.appendIfNotSeen(l1vv)
+		}
+	case kind == reflect.Ptr, kind == reflect.Struct:
+		if l1vv.Interface() == l2vv.Interface() {
+			i.appendIfNotSeen(l1vv)
+		}
+	case kind == reflect.Interface:
+		i.handleValuePair(reflect.ValueOf(l1vv.Interface()), l2vv)
+	}
 }
 
 // Union returns the union of the given sets, l1 and l2. l1 and
@@ -545,7 +568,7 @@ func (ns *Namespace) Slice(args ...interface{}) []interface{} {
 // If either l1 or l2 is nil then the non-nil list will be returned.
 func (ns *Namespace) Union(l1, l2 interface{}) (interface{}, error) {
 	if l1 == nil && l2 == nil {
-		return nil, errors.New("both arrays/slices have to be of the same type")
+		return []interface{}{}, nil
 	} else if l1 == nil && l2 != nil {
 		return l2, nil
 	} else if l1 != nil && l2 == nil {
@@ -555,35 +578,120 @@ func (ns *Namespace) Union(l1, l2 interface{}) (interface{}, error) {
 	l1v := reflect.ValueOf(l1)
 	l2v := reflect.ValueOf(l2)
 
+	var ins *intersector
+
 	switch l1v.Kind() {
 	case reflect.Array, reflect.Slice:
 		switch l2v.Kind() {
 		case reflect.Array, reflect.Slice:
-			r := reflect.MakeSlice(l1v.Type(), 0, 0)
+			ins = &intersector{r: reflect.MakeSlice(l1v.Type(), 0, 0), seen: make(map[interface{}]bool)}
 
-			if l1v.Type() != l2v.Type() {
-				return r.Interface(), nil
+			if l1v.Type() != l2v.Type() &&
+				l1v.Type().Elem().Kind() != reflect.Interface &&
+				l2v.Type().Elem().Kind() != reflect.Interface {
+				return ins.r.Interface(), nil
 			}
 
+			var (
+				l1vv  reflect.Value
+				isNil bool
+			)
+
 			for i := 0; i < l1v.Len(); i++ {
-				elem := l1v.Index(i)
-				if !ns.In(r.Interface(), elem.Interface()) {
-					r = reflect.Append(r, elem)
+				l1vv, isNil = indirectInterface(l1v.Index(i))
+
+				if !l1vv.Type().Comparable() {
+					return []interface{}{}, errors.New("union does not support slices or arrays of uncomparable types")
+				}
+
+				if !isNil {
+					ins.appendIfNotSeen(l1vv)
+				}
+			}
+
+			if !l1vv.IsValid() {
+				// The first slice may be empty. Pick the first value of the second
+				// to use as a prototype.
+				if l2v.Len() > 0 {
+					l1vv = l2v.Index(0)
 				}
 			}
 
 			for j := 0; j < l2v.Len(); j++ {
-				elem := l2v.Index(j)
-				if !ns.In(r.Interface(), elem.Interface()) {
-					r = reflect.Append(r, elem)
+				l2vv := l2v.Index(j)
+
+				switch kind := l1vv.Kind(); {
+				case kind == reflect.String:
+					l2t, err := toString(l2vv)
+					if err == nil {
+						ins.appendIfNotSeen(reflect.ValueOf(l2t))
+					}
+				case isNumber(kind):
+					var err error
+					l2vv, err = convertNumber(l2vv, kind)
+					if err == nil {
+						ins.appendIfNotSeen(l2vv)
+					}
+				case kind == reflect.Interface, kind == reflect.Struct, kind == reflect.Ptr:
+					ins.appendIfNotSeen(l2vv)
+
 				}
 			}
 
-			return r.Interface(), nil
+			return ins.r.Interface(), nil
 		default:
 			return nil, errors.New("can't iterate over " + reflect.ValueOf(l2).Type().String())
 		}
 	default:
 		return nil, errors.New("can't iterate over " + reflect.ValueOf(l1).Type().String())
 	}
+}
+
+// Uniq takes in a slice or array and returns a slice with subsequent
+// duplicate elements removed.
+func (ns *Namespace) Uniq(l interface{}) (interface{}, error) {
+	if l == nil {
+		return make([]interface{}, 0), nil
+	}
+
+	lv := reflect.ValueOf(l)
+	lv, isNil := indirect(lv)
+	if isNil {
+		return nil, errors.New("invalid nil argument to Uniq")
+	}
+
+	var ret reflect.Value
+
+	switch lv.Kind() {
+	case reflect.Slice:
+		ret = reflect.MakeSlice(lv.Type(), 0, 0)
+	case reflect.Array:
+		ret = reflect.MakeSlice(reflect.SliceOf(lv.Type().Elem()), 0, 0)
+	default:
+		return nil, errors.New("Can't use Uniq on " + reflect.ValueOf(lv).Type().String())
+	}
+
+	for i := 0; i != lv.Len(); i++ {
+		lvv := lv.Index(i)
+		lvv, isNil := indirect(lvv)
+		if isNil {
+			continue
+		}
+
+		if !ns.In(ret.Interface(), lvv.Interface()) {
+			ret = reflect.Append(ret, lvv)
+		}
+	}
+	return ret.Interface(), nil
+}
+
+// KeyVals creates a key and values wrapper.
+func (ns *Namespace) KeyVals(key interface{}, vals ...interface{}) (types.KeyValues, error) {
+	return types.KeyValues{Key: key, Values: vals}, nil
+}
+
+// NewScratch creates a new Scratch which can be used to store values in a
+// thread safe way.
+func (ns *Namespace) NewScratch() *maps.Scratch {
+	return maps.NewScratch()
 }

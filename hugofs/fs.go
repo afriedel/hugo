@@ -15,21 +15,24 @@
 package hugofs
 
 import (
+	"github.com/gohugoio/hugo/config"
 	"github.com/spf13/afero"
-	"github.com/spf13/hugo/config"
 )
 
 // Os points to an Os Afero file system.
 var Os = &afero.OsFs{}
 
+// Fs abstracts the file system to separate source and destination file systems
+// and allows both to be mocked for testing.
 type Fs struct {
 	// Source is Hugo's source file system.
 	Source afero.Fs
 
-	// Destination is Hugo's destionation file system.
+	// Destination is Hugo's destination file system.
 	Destination afero.Fs
 
 	// Os is an OS file system.
+	// NOTE: Field is currently unused.
 	Os afero.Fs
 
 	// WorkingDir is a read-only file system

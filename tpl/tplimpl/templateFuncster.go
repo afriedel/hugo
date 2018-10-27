@@ -19,8 +19,8 @@ import (
 	"strings"
 	texttemplate "text/template"
 
-	bp "github.com/spf13/hugo/bufferpool"
-	"github.com/spf13/hugo/deps"
+	bp "github.com/gohugoio/hugo/bufferpool"
+	"github.com/gohugoio/hugo/deps"
 )
 
 // Some of the template funcs are'nt entirely stateless.
@@ -51,12 +51,12 @@ func (t *templateFuncster) partial(name string, contextList ...interface{}) (int
 	}
 
 	for _, n := range []string{"partials/" + name, "theme/partials/" + name} {
-		templ := t.Tmpl.Lookup(n)
-		if templ == nil {
+		templ, found := t.Tmpl.Lookup(n)
+		if !found {
 			// For legacy reasons.
-			templ = t.Tmpl.Lookup(n + ".html")
+			templ, found = t.Tmpl.Lookup(n + ".html")
 		}
-		if templ != nil {
+		if found {
 			b := bp.GetBuffer()
 			defer bp.PutBuffer(b)
 
@@ -64,7 +64,7 @@ func (t *templateFuncster) partial(name string, contextList ...interface{}) (int
 				return "", err
 			}
 
-			if _, ok := templ.Template.(*texttemplate.Template); ok {
+			if _, ok := templ.(*texttemplate.Template); ok {
 				return b.String(), nil
 			}
 

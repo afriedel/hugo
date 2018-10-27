@@ -18,21 +18,36 @@ import (
 	"fmt"
 	_os "os"
 
+	"github.com/gohugoio/hugo/deps"
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/deps"
 )
 
 // New returns a new instance of the os-namespaced template functions.
 func New(deps *deps.Deps) *Namespace {
+
+	// Since Hugo 0.38 we can have multiple content dirs. This can make it hard to
+	// reason about where the file is placed relative to the project root.
+	// To make the {{ readFile .Filename }} variant just work, we create a composite
+	// filesystem that first checks the work dir fs and then the content fs.
+	var rfs afero.Fs
+	if deps.Fs != nil {
+		rfs = deps.Fs.WorkingDir
+		if deps.PathSpec != nil && deps.PathSpec.BaseFs != nil {
+			rfs = afero.NewReadOnlyFs(afero.NewCopyOnWriteFs(deps.PathSpec.BaseFs.Content.Fs, deps.Fs.WorkingDir))
+		}
+	}
+
 	return &Namespace{
-		deps: deps,
+		readFileFs: rfs,
+		deps:       deps,
 	}
 }
 
 // Namespace provides template functions for the "os" namespace.
 type Namespace struct {
-	deps *deps.Deps
+	readFileFs afero.Fs
+	deps       *deps.Deps
 }
 
 // Getenv retrieves the value of the environment variable named by the key.
@@ -46,10 +61,10 @@ func (ns *Namespace) Getenv(key interface{}) (string, error) {
 	return _os.Getenv(skey), nil
 }
 
-// readFile reads the file named by filename relative to the given basepath
+// readFile reads the file named by filename in the given filesystem
 // and returns the contents as a string.
 // There is a upper size limit set at 1 megabytes.
-func readFile(fs *afero.BasePathFs, filename string) (string, error) {
+func readFile(fs afero.Fs, filename string) (string, error) {
 	if filename == "" {
 		return "", errors.New("readFile needs a filename")
 	}
@@ -70,16 +85,16 @@ func readFile(fs *afero.BasePathFs, filename string) (string, error) {
 	return string(b), nil
 }
 
-// ReadFilereads the file named by filename relative to the configured
-// WorkingDir.  It returns the contents as a string.  There is a upper size
-// limit set at 1 megabytes.
+// ReadFile reads the file named by filename relative to the configured WorkingDir.
+// It returns the contents as a string.
+// There is an upper size limit set at 1 megabytes.
 func (ns *Namespace) ReadFile(i interface{}) (string, error) {
 	s, err := cast.ToStringE(i)
 	if err != nil {
 		return "", err
 	}
 
-	return readFile(ns.deps.Fs.WorkingDir, s)
+	return readFile(ns.readFileFs, s)
 }
 
 // ReadDir lists the directory contents relative to the configured WorkingDir.
@@ -95,4 +110,42 @@ func (ns *Namespace) ReadDir(i interface{}) ([]_os.FileInfo, error) {
 	}
 
 	return list, nil
+}
+
+// FileExists checks whether a file exists under the given path.
+func (ns *Namespace) FileExists(i interface{}) (bool, error) {
+	path, err := cast.ToStringE(i)
+	if err != nil {
+		return false, err
+	}
+
+	if path == "" {
+		return false, errors.New("fileExists needs a path to a file")
+	}
+
+	status, err := afero.Exists(ns.readFileFs, path)
+	if err != nil {
+		return false, err
+	}
+
+	return status, nil
+}
+
+// Stat returns the os.FileInfo structure describing file.
+func (ns *Namespace) Stat(i interface{}) (_os.FileInfo, error) {
+	path, err := cast.ToStringE(i)
+	if err != nil {
+		return nil, err
+	}
+
+	if path == "" {
+		return nil, errors.New("fileStat needs a path to a file")
+	}
+
+	r, err := ns.readFileFs.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }

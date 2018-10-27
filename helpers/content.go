@@ -22,76 +22,122 @@ import (
 	"fmt"
 	"html/template"
 	"os/exec"
+	"runtime"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/gohugoio/hugo/common/maps"
+
 	"github.com/chaseadamsio/goorgeous"
+	bp "github.com/gohugoio/hugo/bufferpool"
+	"github.com/gohugoio/hugo/config"
 	"github.com/miekg/mmark"
 	"github.com/mitchellh/mapstructure"
 	"github.com/russross/blackfriday"
-	bp "github.com/spf13/hugo/bufferpool"
-	"github.com/spf13/hugo/config"
 	jww "github.com/spf13/jwalterweatherman"
 
 	"strings"
 )
 
-// SummaryLength is the length of the summary that Hugo extracts from a content.
-var SummaryLength = 70
-
 // SummaryDivider denotes where content summarization should end. The default is "<!--more-->".
 var SummaryDivider = []byte("<!--more-->")
 
+// ContentSpec provides functionality to render markdown content.
 type ContentSpec struct {
-	blackfriday                map[string]interface{}
+	BlackFriday                *BlackFriday
 	footnoteAnchorPrefix       string
 	footnoteReturnLinkContents string
+	// SummaryLength is the length of the summary that Hugo extracts from a content.
+	summaryLength int
+
+	BuildFuture  bool
+	BuildExpired bool
+	BuildDrafts  bool
+
+	Highlight            func(code, lang, optsStr string) (string, error)
+	defatultPygmentsOpts map[string]string
 
 	cfg config.Provider
 }
 
-func NewContentSpec(cfg config.Provider) *ContentSpec {
-	return &ContentSpec{
-		blackfriday:                cfg.GetStringMap("blackfriday"),
+// NewContentSpec returns a ContentSpec initialized
+// with the appropriate fields from the given config.Provider.
+func NewContentSpec(cfg config.Provider) (*ContentSpec, error) {
+	bf := newBlackfriday(cfg.GetStringMap("blackfriday"))
+	spec := &ContentSpec{
+		BlackFriday:                bf,
 		footnoteAnchorPrefix:       cfg.GetString("footnoteAnchorPrefix"),
 		footnoteReturnLinkContents: cfg.GetString("footnoteReturnLinkContents"),
+		summaryLength:              cfg.GetInt("summaryLength"),
+		BuildFuture:                cfg.GetBool("buildFuture"),
+		BuildExpired:               cfg.GetBool("buildExpired"),
+		BuildDrafts:                cfg.GetBool("buildDrafts"),
 
 		cfg: cfg,
 	}
+
+	// Highlighting setup
+	options, err := parseDefaultPygmentsOpts(cfg)
+	if err != nil {
+		return nil, err
+	}
+	spec.defatultPygmentsOpts = options
+
+	// Use the Pygmentize on path if present
+	useClassic := false
+	h := newHiglighters(spec)
+
+	if cfg.GetBool("pygmentsUseClassic") {
+		if !hasPygments() {
+			jww.WARN.Println("Highlighting with pygmentsUseClassic set requires Pygments to be installed and in the path")
+		} else {
+			useClassic = true
+		}
+	}
+
+	if useClassic {
+		spec.Highlight = h.pygmentsHighlight
+	} else {
+		spec.Highlight = h.chromaHighlight
+	}
+
+	return spec, nil
 }
 
-// Blackfriday holds configuration values for Blackfriday rendering.
-type Blackfriday struct {
-	Smartypants                      bool
-	AngledQuotes                     bool
-	Fractions                        bool
-	HrefTargetBlank                  bool
-	SmartDashes                      bool
-	LatexDashes                      bool
-	TaskLists                        bool
-	PlainIDAnchors                   bool
-	SourceRelativeLinksEval          bool
-	SourceRelativeLinksProjectFolder string
-	Extensions                       []string
-	ExtensionsMask                   []string
+// BlackFriday holds configuration values for BlackFriday rendering.
+type BlackFriday struct {
+	Smartypants           bool
+	SmartypantsQuotesNBSP bool
+	AngledQuotes          bool
+	Fractions             bool
+	HrefTargetBlank       bool
+	NofollowLinks         bool
+	NoreferrerLinks       bool
+	SmartDashes           bool
+	LatexDashes           bool
+	TaskLists             bool
+	PlainIDAnchors        bool
+	Extensions            []string
+	ExtensionsMask        []string
 }
 
 // NewBlackfriday creates a new Blackfriday filled with site config or some sane defaults.
-func (c ContentSpec) NewBlackfriday() *Blackfriday {
+func newBlackfriday(config map[string]interface{}) *BlackFriday {
 	defaultParam := map[string]interface{}{
-		"smartypants":                      true,
-		"angledQuotes":                     false,
-		"fractions":                        true,
-		"hrefTargetBlank":                  false,
-		"smartDashes":                      true,
-		"latexDashes":                      true,
-		"plainIDAnchors":                   true,
-		"taskLists":                        true,
-		"sourceRelativeLinks":              false,
-		"sourceRelativeLinksProjectFolder": "/docs/content",
+		"smartypants":           true,
+		"angledQuotes":          false,
+		"smartypantsQuotesNBSP": false,
+		"fractions":             true,
+		"hrefTargetBlank":       false,
+		"nofollowLinks":         false,
+		"noreferrerLinks":       false,
+		"smartDashes":           true,
+		"latexDashes":           true,
+		"plainIDAnchors":        true,
+		"taskLists":             true,
 	}
 
-	ToLowerMap(defaultParam)
+	maps.ToLower(defaultParam)
 
 	siteConfig := make(map[string]interface{})
 
@@ -99,22 +145,15 @@ func (c ContentSpec) NewBlackfriday() *Blackfriday {
 		siteConfig[k] = v
 	}
 
-	if c.blackfriday != nil {
-		for k, v := range c.blackfriday {
+	if config != nil {
+		for k, v := range config {
 			siteConfig[k] = v
 		}
 	}
 
-	combinedConfig := &Blackfriday{}
+	combinedConfig := &BlackFriday{}
 	if err := mapstructure.Decode(siteConfig, combinedConfig); err != nil {
 		jww.FATAL.Printf("Failed to get site rendering config\n%s", err.Error())
-	}
-
-	if combinedConfig.SourceRelativeLinksEval {
-		// Remove in Hugo 0.21
-		Deprecated("blackfriday", "sourceRelativeLinksEval",
-			`There is no replacement for this feature, as no developer has stepped up to the plate and volunteered to maintain this feature`, false)
-
 	}
 
 	return combinedConfig
@@ -137,6 +176,7 @@ var blackfridayExtensionMap = map[string]int{
 	"autoHeaderIds":          blackfriday.EXTENSION_AUTO_HEADER_IDS,
 	"backslashLineBreak":     blackfriday.EXTENSION_BACKSLASH_LINE_BREAK,
 	"definitionLists":        blackfriday.EXTENSION_DEFINITION_LISTS,
+	"joinLines":              blackfriday.EXTENSION_JOIN_LINES,
 }
 
 var stripHTMLReplacer = strings.NewReplacer("\n", " ", "</p>", "\n", "<br>", "\n", "<br />", "\n")
@@ -203,7 +243,7 @@ func BytesToHTML(b []byte) template.HTML {
 }
 
 // getHTMLRenderer creates a new Blackfriday HTML Renderer with the given configuration.
-func (c ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) blackfriday.Renderer {
+func (c *ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) blackfriday.Renderer {
 	renderParameters := blackfriday.HtmlRendererParameters{
 		FootnoteAnchorPrefix:       c.footnoteAnchorPrefix,
 		FootnoteReturnLinkContents: c.footnoteReturnLinkContents,
@@ -228,6 +268,10 @@ func (c ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) bl
 		htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
 	}
 
+	if ctx.Config.SmartypantsQuotesNBSP {
+		htmlFlags |= blackfriday.HTML_SMARTYPANTS_QUOTES_NBSP
+	}
+
 	if ctx.Config.AngledQuotes {
 		htmlFlags |= blackfriday.HTML_SMARTYPANTS_ANGLED_QUOTES
 	}
@@ -240,6 +284,14 @@ func (c ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) bl
 		htmlFlags |= blackfriday.HTML_HREF_TARGET_BLANK
 	}
 
+	if ctx.Config.NofollowLinks {
+		htmlFlags |= blackfriday.HTML_NOFOLLOW_LINKS
+	}
+
+	if ctx.Config.NoreferrerLinks {
+		htmlFlags |= blackfriday.HTML_NOREFERRER_LINKS
+	}
+
 	if ctx.Config.SmartDashes {
 		htmlFlags |= blackfriday.HTML_SMARTYPANTS_DASHES
 	}
@@ -249,6 +301,7 @@ func (c ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) bl
 	}
 
 	return &HugoHTMLRenderer{
+		cs:               c,
 		RenderingContext: ctx,
 		Renderer:         blackfriday.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
 	}
@@ -300,7 +353,7 @@ func (c ContentSpec) markdownRender(ctx *RenderingContext) []byte {
 }
 
 // getMmarkHTMLRenderer creates a new mmark HTML Renderer with the given configuration.
-func (c ContentSpec) getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingContext) mmark.Renderer {
+func (c *ContentSpec) getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingContext) mmark.Renderer {
 	renderParameters := mmark.HtmlRendererParameters{
 		FootnoteAnchorPrefix:       c.footnoteAnchorPrefix,
 		FootnoteReturnLinkContents: c.footnoteReturnLinkContents,
@@ -321,8 +374,9 @@ func (c ContentSpec) getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingContex
 	htmlFlags |= mmark.HTML_FOOTNOTE_RETURN_LINKS
 
 	return &HugoMmarkHTMLRenderer{
-		mmark.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
-		c.cfg,
+		cs:       c,
+		Renderer: mmark.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
+		Cfg:      c.cfg,
 	}
 }
 
@@ -361,6 +415,9 @@ func (c ContentSpec) mmarkRender(ctx *RenderingContext) []byte {
 
 // ExtractTOC extracts Table of Contents from content.
 func ExtractTOC(content []byte) (newcontent []byte, toc []byte) {
+	if !bytes.Contains(content, []byte("<nav>")) {
+		return content, nil
+	}
 	origContent := make([]byte, len(content))
 	copy(origContent, content)
 	first := []byte(`<nav>
@@ -403,10 +460,8 @@ type RenderingContext struct {
 	PageFmt      string
 	DocumentID   string
 	DocumentName string
-	Config       *Blackfriday
+	Config       *BlackFriday
 	RenderTOC    bool
-	FileResolver FileResolverFunc
-	LinkResolver LinkResolverFunc
 	Cfg          config.Provider
 }
 
@@ -425,6 +480,8 @@ func (c ContentSpec) RenderBytes(ctx *RenderingContext) []byte {
 		return getRstContent(ctx)
 	case "org":
 		return orgRender(ctx, c)
+	case "pandoc":
+		return getPandocContent(ctx)
 	}
 }
 
@@ -451,20 +508,23 @@ func totalWordsOld(s string) int {
 }
 
 // TruncateWordsByRune truncates words by runes.
-func TruncateWordsByRune(words []string, max int) (string, bool) {
+func (c *ContentSpec) TruncateWordsByRune(in []string) (string, bool) {
+	words := make([]string, len(in))
+	copy(words, in)
+
 	count := 0
 	for index, word := range words {
-		if count >= max {
+		if count >= c.summaryLength {
 			return strings.Join(words[:index], " "), true
 		}
 		runeCount := utf8.RuneCountInString(word)
 		if len(word) == runeCount {
 			count++
-		} else if count+runeCount < max {
+		} else if count+runeCount < c.summaryLength {
 			count += runeCount
 		} else {
 			for ri := range word {
-				if count >= max {
+				if count >= c.summaryLength {
 					truncatedWords := append(words[:index], word[:ri])
 					return strings.Join(truncatedWords, " "), true
 				}
@@ -478,8 +538,7 @@ func TruncateWordsByRune(words []string, max int) (string, bool) {
 
 // TruncateWordsToWholeSentence takes content and truncates to whole sentence
 // limited by max number of words. It also returns whether it is truncated.
-func TruncateWordsToWholeSentence(s string, max int) (string, bool) {
-
+func (c *ContentSpec) TruncateWordsToWholeSentence(s string) (string, bool) {
 	var (
 		wordCount     = 0
 		lastWordIndex = -1
@@ -490,7 +549,7 @@ func TruncateWordsToWholeSentence(s string, max int) (string, bool) {
 			wordCount++
 			lastWordIndex = i
 
-			if wordCount >= max {
+			if wordCount >= c.summaryLength {
 				break
 			}
 
@@ -522,75 +581,72 @@ func isEndOfSentence(r rune) bool {
 }
 
 // Kept only for benchmark.
-func truncateWordsToWholeSentenceOld(content string, max int) (string, bool) {
+func (c *ContentSpec) truncateWordsToWholeSentenceOld(content string) (string, bool) {
 	words := strings.Fields(content)
 
-	if max >= len(words) {
+	if c.summaryLength >= len(words) {
 		return strings.Join(words, " "), false
 	}
 
-	for counter, word := range words[max:] {
+	for counter, word := range words[c.summaryLength:] {
 		if strings.HasSuffix(word, ".") ||
 			strings.HasSuffix(word, "?") ||
 			strings.HasSuffix(word, ".\"") ||
 			strings.HasSuffix(word, "!") {
-			upper := max + counter + 1
+			upper := c.summaryLength + counter + 1
 			return strings.Join(words[:upper], " "), (upper < len(words))
 		}
 	}
 
-	return strings.Join(words[:max], " "), true
+	return strings.Join(words[:c.summaryLength], " "), true
 }
 
 func getAsciidocExecPath() string {
-	path, err := exec.LookPath("asciidoctor")
+	path, err := exec.LookPath("asciidoc")
 	if err != nil {
-		path, err = exec.LookPath("asciidoc")
-		if err != nil {
-			return ""
-		}
+		return ""
 	}
 	return path
 }
 
-// HasAsciidoc returns whether Asciidoctor or Asciidoc is installed on this computer.
+func getAsciidoctorExecPath() string {
+	path, err := exec.LookPath("asciidoctor")
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// HasAsciidoc returns whether Asciidoc or Asciidoctor is installed on this computer.
 func HasAsciidoc() bool {
-	return getAsciidocExecPath() != ""
+	return (getAsciidoctorExecPath() != "" ||
+		getAsciidocExecPath() != "")
 }
 
 // getAsciidocContent calls asciidoctor or asciidoc as an external helper
 // to convert AsciiDoc content to HTML.
 func getAsciidocContent(ctx *RenderingContext) []byte {
-	content := ctx.Content
-	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
-
-	path := getAsciidocExecPath()
+	var isAsciidoctor bool
+	path := getAsciidoctorExecPath()
 	if path == "" {
-		jww.ERROR.Println("asciidoctor / asciidoc not found in $PATH: Please install.\n",
-			"                 Leaving AsciiDoc content unrendered.")
-		return content
+		path = getAsciidocExecPath()
+		if path == "" {
+			jww.ERROR.Println("asciidoctor / asciidoc not found in $PATH: Please install.\n",
+				"                 Leaving AsciiDoc content unrendered.")
+			return ctx.Content
+		}
+	} else {
+		isAsciidoctor = true
 	}
 
 	jww.INFO.Println("Rendering", ctx.DocumentName, "with", path, "...")
-	cmd := exec.Command(path, "--no-header-footer", "--safe", "-")
-	cmd.Stdin = bytes.NewReader(cleanContent)
-	var out, cmderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &cmderr
-	err := cmd.Run()
-	// asciidoctor has exit code 0 even if there are errors in stderr
-	// -> log stderr output regardless of state of err
-	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
-		item := strings.TrimSpace(item)
-		if item != "" {
-			jww.ERROR.Println(strings.Replace(item, "<stdin>", ctx.DocumentName, 1))
-		}
+	args := []string{"--no-header-footer", "--safe"}
+	if isAsciidoctor {
+		// asciidoctor-specific arg to show stack traces on errors
+		args = append(args, "--trace")
 	}
-	if err != nil {
-		jww.ERROR.Printf("%s rendering %s: %v", path, ctx.DocumentName, err)
-	}
-
-	return normalizeExternalHelperLineFeeds(out.Bytes())
+	args = append(args, "-")
+	return externallyRenderContent(ctx, path, args)
 }
 
 // HasRst returns whether rst2html is installed on this computer.
@@ -623,40 +679,28 @@ func getPythonExecPath() string {
 // getRstContent calls the Python script rst2html as an external helper
 // to convert reStructuredText content to HTML.
 func getRstContent(ctx *RenderingContext) []byte {
-	content := ctx.Content
-	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
-
-	python := getPythonExecPath()
 	path := getRstExecPath()
 
 	if path == "" {
 		jww.ERROR.Println("rst2html / rst2html.py not found in $PATH: Please install.\n",
 			"                 Leaving reStructuredText content unrendered.")
-		return content
+		return ctx.Content
 
 	}
-
 	jww.INFO.Println("Rendering", ctx.DocumentName, "with", path, "...")
-	cmd := exec.Command(python, path, "--leave-comments")
-	cmd.Stdin = bytes.NewReader(cleanContent)
-	var out, cmderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &cmderr
-	err := cmd.Run()
-	// By default rst2html exits w/ non-zero exit code only if severe, i.e.
-	// halting errors occurred. -> log stderr output regardless of state of err
-	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
-		item := strings.TrimSpace(item)
-		if item != "" {
-			jww.ERROR.Println(strings.Replace(item, "<stdin>", ctx.DocumentName, 1))
-		}
+	var result []byte
+	// certain *nix based OSs wrap executables in scripted launchers
+	// invoking binaries on these OSs via python interpreter causes SyntaxError
+	// invoke directly so that shebangs work as expected
+	// handle Windows manually because it doesn't do shebangs
+	if runtime.GOOS == "windows" {
+		python := getPythonExecPath()
+		args := []string{path, "--leave-comments", "--initial-header-level=2"}
+		result = externallyRenderContent(ctx, python, args)
+	} else {
+		args := []string{"--leave-comments", "--initial-header-level=2"}
+		result = externallyRenderContent(ctx, path, args)
 	}
-	if err != nil {
-		jww.ERROR.Printf("%s rendering %s: %v", path, ctx.DocumentName, err)
-	}
-
-	result := normalizeExternalHelperLineFeeds(out.Bytes())
-
 	// TODO(bep) check if rst2html has a body only option.
 	bodyStart := bytes.Index(result, []byte("<body>\n"))
 	if bodyStart < 0 {
@@ -674,9 +718,46 @@ func getRstContent(ctx *RenderingContext) []byte {
 	return result[bodyStart+7 : bodyEnd]
 }
 
+// getPandocContent calls pandoc as an external helper to convert pandoc markdown to HTML.
+func getPandocContent(ctx *RenderingContext) []byte {
+	path, err := exec.LookPath("pandoc")
+	if err != nil {
+		jww.ERROR.Println("pandoc not found in $PATH: Please install.\n",
+			"                 Leaving pandoc content unrendered.")
+		return ctx.Content
+	}
+	args := []string{"--mathjax"}
+	return externallyRenderContent(ctx, path, args)
+}
+
 func orgRender(ctx *RenderingContext, c ContentSpec) []byte {
 	content := ctx.Content
 	cleanContent := bytes.Replace(content, []byte("# more"), []byte(""), 1)
 	return goorgeous.Org(cleanContent,
 		c.getHTMLRenderer(blackfriday.HTML_TOC, ctx))
+}
+
+func externallyRenderContent(ctx *RenderingContext, path string, args []string) []byte {
+	content := ctx.Content
+	cleanContent := bytes.Replace(content, SummaryDivider, []byte(""), 1)
+
+	cmd := exec.Command(path, args...)
+	cmd.Stdin = bytes.NewReader(cleanContent)
+	var out, cmderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &cmderr
+	err := cmd.Run()
+	// Most external helpers exit w/ non-zero exit code only if severe, i.e.
+	// halting errors occurred. -> log stderr output regardless of state of err
+	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
+		item := strings.TrimSpace(item)
+		if item != "" {
+			jww.ERROR.Printf("%s: %s", ctx.DocumentName, item)
+		}
+	}
+	if err != nil {
+		jww.ERROR.Printf("%s rendering %s: %v", path, ctx.DocumentName, err)
+	}
+
+	return normalizeExternalHelperLineFeeds(out.Bytes())
 }

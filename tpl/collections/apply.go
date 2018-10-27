@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/spf13/hugo/tpl"
+	"github.com/gohugoio/hugo/tpl"
 )
 
 // Apply takes a map, array, or slice and returns a new slice with the function fname applied over it.
@@ -136,9 +136,21 @@ func (ns *Namespace) lookupFunc(fname string) (reflect.Value, bool) {
 	return m, true
 }
 
-// indirect is taken from 'text/template/exec.go'
+// indirect is borrowed from the Go stdlib: 'text/template/exec.go'
 func indirect(v reflect.Value) (rv reflect.Value, isNil bool) {
 	for ; v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface; v = v.Elem() {
+		if v.IsNil() {
+			return v, true
+		}
+		if v.Kind() == reflect.Interface && v.NumMethod() > 0 {
+			break
+		}
+	}
+	return v, false
+}
+
+func indirectInterface(v reflect.Value) (rv reflect.Value, isNil bool) {
+	for ; v.Kind() == reflect.Interface; v = v.Elem() {
 		if v.IsNil() {
 			return v, true
 		}

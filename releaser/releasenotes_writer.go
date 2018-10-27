@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package release implements a set of utilities and a wrapper around Goreleaser
+// Package releaser implements a set of utilities and a wrapper around Goreleaser
 // to help automate the Hugo release process.
 package releaser
 
@@ -29,17 +29,17 @@ import (
 )
 
 const (
-	issueLinkTemplate            = "[#%d](https://github.com/spf13/hugo/issues/%d)"
+	issueLinkTemplate            = "[#%d](https://github.com/gohugoio/hugo/issues/%d)"
 	linkTemplate                 = "[%s](%s)"
 	releaseNotesMarkdownTemplate = `
 {{- $patchRelease := isPatch . -}}
 {{- $contribsPerAuthor := .All.ContribCountPerAuthor -}}
-
+{{- $docsContribsPerAuthor := .Docs.ContribCountPerAuthor -}}
 {{- if $patchRelease }}
 {{ if eq (len .All) 1 }}
 This is a bug-fix release with one important fix.
 {{ else }}
-This is a bug-fix relase with a couple of important fixes.
+This is a bug-fix release with a couple of important fixes.
 {{ end }}
 {{ else }}
 This release represents **{{ len .All }} contributions by {{ len $contribsPerAuthor }} contributors** to the main Hugo code base.
@@ -51,17 +51,27 @@ This release represents **{{ len .All }} contributions by {{ len $contribsPerAut
 {{- $u3 := index $contribsPerAuthor 2 -}}
 {{- $u4 := index $contribsPerAuthor 3 -}}
 {{- $u1.AuthorLink }} leads the Hugo development with a significant amount of contributions, but also a big shoutout to {{ $u2.AuthorLink }}, {{ $u3.AuthorLink }}, and {{ $u4.AuthorLink }} for their ongoing contributions.
-And as always a big thanks to [@digitalcraftsman](https://github.com/digitalcraftsman) for his relentless work on keeping the documentation and the themes site in pristine condition.
+And a big thanks to [@digitalcraftsman](https://github.com/digitalcraftsman) and [@onedrawingperday](https://github.com/onedrawingperday) for their relentless work on keeping the themes site in pristine condition and to [@kaushalmodi](https://github.com/kaushalmodi) for his great work on the documentation site.
+{{ end }}
+{{- if not $patchRelease }}
+Many have also been busy writing and fixing the documentation in [hugoDocs](https://github.com/gohugoio/hugoDocs), 
+which has received **{{ len .Docs }} contributions by {{ len $docsContribsPerAuthor }} contributors**.
+{{- if  gt (len $docsContribsPerAuthor) 3 -}}
+{{- $u1 := index $docsContribsPerAuthor 0 -}}
+{{- $u2 := index $docsContribsPerAuthor 1 -}}
+{{- $u3 := index $docsContribsPerAuthor 2 -}}
+{{- $u4 := index $docsContribsPerAuthor 3 }} A special thanks to {{ $u1.AuthorLink }}, {{ $u2.AuthorLink }}, {{ $u3.AuthorLink }}, and {{ $u4.AuthorLink }} for their work on the documentation site.
+{{ end }}
 {{ end }}
 Hugo now has:
 
 {{ with .Repo -}}
-* {{ .Stars }}+ [stars](https://github.com/spf13/hugo/stargazers)
-* {{ len .Contributors }}+ [contributors](https://github.com/spf13/hugo/graphs/contributors)
+* {{ .Stars }}+ [stars](https://github.com/gohugoio/hugo/stargazers)
+* {{ len .Contributors }}+ [contributors](https://github.com/gohugoio/hugo/graphs/contributors)
 {{- end -}}
 {{ with .ThemeCount }}
-* 156+ [themes](http://themes.gohugo.io/)
-{{- end }}
+* {{ . }}+ [themes](http://themes.gohugo.io/)
+{{ end }}
 {{ with .Notes }}
 ## Notes
 {{ template "change-section" . }}
@@ -75,7 +85,6 @@ Hugo now has:
 {{ $tmplChanges := index . "templateChanges" -}}
 {{- $outChanges := index . "outChanges" -}}
 {{- $coreChanges := index . "coreChanges" -}}
-{{- $docsChanges := index . "docsChanges" -}}
 {{- $otherChanges := index . "otherChanges" -}}
 {{- with $tmplChanges -}}
 ### Templates
@@ -89,10 +98,6 @@ Hugo now has:
 ### Core
 {{ template "change-section" . }}
 {{- end -}}
-{{- with $docsChanges -}}
-### Docs
-{{ template "change-section"  . }}
-{{- end -}}
 {{- with $otherChanges -}}
 ### Other
 {{ template "change-section"  . }}
@@ -103,9 +108,9 @@ Hugo now has:
 {{ define "change-section" }}
 {{ range . }}
 {{- if .GitHubCommit -}}
-* {{ .Subject }} {{ . | commitURL }} {{ . | authorURL }} {{ range .Issues }}{{ . | issue }} {{ end }}
+* {{ .Subject }} {{ . | commitURL }} {{ . | authorURL }} {{ range .Issues }}{{ . | issue }}{{ end }}
 {{ else -}}
-* {{ .Subject }} {{ range .Issues }}{{ . | issue }} {{ end }}
+* {{ .Subject }} {{ range .Issues }}{{ . | issue }}{{ end }}
 {{ end -}}
 {{- end }}
 {{ end }}
@@ -120,23 +125,24 @@ var templateFuncs = template.FuncMap{
 		return fmt.Sprintf(issueLinkTemplate, id, id)
 	},
 	"commitURL": func(info gitInfo) string {
-		if info.GitHubCommit.HtmlURL == "" {
+		if info.GitHubCommit.HTMLURL == "" {
 			return ""
 		}
-		return fmt.Sprintf(linkTemplate, info.Hash, info.GitHubCommit.HtmlURL)
+		return fmt.Sprintf(linkTemplate, info.Hash, info.GitHubCommit.HTMLURL)
 	},
 	"authorURL": func(info gitInfo) string {
 		if info.GitHubCommit.Author.Login == "" {
 			return ""
 		}
-		return fmt.Sprintf(linkTemplate, "@"+info.GitHubCommit.Author.Login, info.GitHubCommit.Author.HtmlURL)
+		return fmt.Sprintf(linkTemplate, "@"+info.GitHubCommit.Author.Login, info.GitHubCommit.Author.HTMLURL)
 	},
 }
 
-func writeReleaseNotes(version string, infos gitInfos, to io.Writer) error {
-	changes := gitInfosToChangeLog(infos)
+func writeReleaseNotes(version string, infosMain, infosDocs gitInfos, to io.Writer) error {
+	client := newGitHubAPI("hugo")
+	changes := gitInfosToChangeLog(infosMain, infosDocs)
 	changes.Version = version
-	repo, err := fetchRepo()
+	repo, err := client.fetchRepo()
 	if err == nil {
 		changes.Repo = &repo
 	}
@@ -160,7 +166,7 @@ func writeReleaseNotes(version string, infos gitInfos, to io.Writer) error {
 }
 
 func fetchThemeCount() (int, error) {
-	resp, err := http.Get("https://github.com/spf13/hugoThemes/blob/master/.gitmodules")
+	resp, err := http.Get("https://raw.githubusercontent.com/gohugoio/hugoThemes/master/.gitmodules")
 	if err != nil {
 		return 0, err
 	}
@@ -170,7 +176,7 @@ func fetchThemeCount() (int, error) {
 	return bytes.Count(b, []byte("submodule")), nil
 }
 
-func writeReleaseNotesToTmpFile(version string, infos gitInfos) (string, error) {
+func writeReleaseNotesToTmpFile(version string, infosMain, infosDocs gitInfos) (string, error) {
 	f, err := ioutil.TempFile("", "hugorelease")
 	if err != nil {
 		return "", err
@@ -178,45 +184,95 @@ func writeReleaseNotesToTmpFile(version string, infos gitInfos) (string, error) 
 
 	defer f.Close()
 
-	if err := writeReleaseNotes(version, infos, f); err != nil {
+	if err := writeReleaseNotes(version, infosMain, infosDocs, f); err != nil {
 		return "", err
 	}
 
 	return f.Name(), nil
 }
 
-func getRelaseNotesDocsTempDirAndName(version string) (string, string) {
-	return hugoFilepath("docs/temp"), fmt.Sprintf("%s-relnotes.md", version)
+func getReleaseNotesDocsTempDirAndName(version string, final bool) (string, string) {
+	if final {
+		return hugoFilepath("temp"), fmt.Sprintf("%s-relnotes-ready.md", version)
+	}
+	return hugoFilepath("temp"), fmt.Sprintf("%s-relnotes.md", version)
 }
 
-func getRelaseNotesDocsTempFilename(version string) string {
-	return filepath.Join(getRelaseNotesDocsTempDirAndName(version))
+func getReleaseNotesDocsTempFilename(version string, final bool) string {
+	return filepath.Join(getReleaseNotesDocsTempDirAndName(version, final))
 }
 
-func writeReleaseNotesToDocsTemp(version string, infos gitInfos) (string, error) {
-	docsTempPath, name := getRelaseNotesDocsTempDirAndName(version)
-	os.Mkdir(docsTempPath, os.ModePerm)
+func (r *ReleaseHandler) releaseNotesState(version string) (releaseNotesState, error) {
+	docsTempPath, name := getReleaseNotesDocsTempDirAndName(version, false)
+	_, err := os.Stat(filepath.Join(docsTempPath, name))
 
-	f, err := os.Create(filepath.Join(docsTempPath, name))
-	if err != nil {
+	if err == nil {
+		return releaseNotesCreated, nil
+	}
+
+	docsTempPath, name = getReleaseNotesDocsTempDirAndName(version, true)
+	_, err = os.Stat(filepath.Join(docsTempPath, name))
+
+	if err == nil {
+		return releaseNotesReady, nil
+	}
+
+	if !os.IsNotExist(err) {
+		return releaseNotesNone, err
+	}
+
+	return releaseNotesNone, nil
+
+}
+
+func (r *ReleaseHandler) writeReleaseNotesToTemp(version string, infosMain, infosDocs gitInfos) (string, error) {
+
+	docsTempPath, name := getReleaseNotesDocsTempDirAndName(version, false)
+
+	var (
+		w io.WriteCloser
+	)
+
+	if !r.try {
+		os.Mkdir(docsTempPath, os.ModePerm)
+
+		f, err := os.Create(filepath.Join(docsTempPath, name))
+		if err != nil {
+			return "", err
+		}
+
+		name = f.Name()
+
+		defer f.Close()
+
+		w = f
+
+	} else {
+		w = os.Stdout
+	}
+
+	if err := writeReleaseNotes(version, infosMain, infosDocs, w); err != nil {
 		return "", err
 	}
 
-	defer f.Close()
-
-	if err := writeReleaseNotes(version, infos, f); err != nil {
-		return "", err
-	}
-
-	return f.Name(), nil
+	return name, nil
 
 }
 
-func writeReleaseNotesToDocs(title, sourceFilename string) (string, error) {
-	targetFilename := filepath.Base(sourceFilename)
-	contentDir := hugoFilepath("docs/content/release-notes")
+func (r *ReleaseHandler) writeReleaseNotesToDocs(title, sourceFilename string) (string, error) {
+	targetFilename := "index.md"
+	bundleDir := strings.TrimSuffix(filepath.Base(sourceFilename), "-ready.md")
+	contentDir := hugoFilepath("docs/content/en/news/" + bundleDir)
 	targetFullFilename := filepath.Join(contentDir, targetFilename)
-	os.Mkdir(contentDir, os.ModePerm)
+
+	if r.try {
+		fmt.Printf("Write release notes to /docs: Bundle %q Dir: %q\n", bundleDir, contentDir)
+		return targetFullFilename, nil
+	}
+
+	if err := os.MkdirAll(contentDir, os.ModePerm); err != nil {
+		return "", nil
+	}
 
 	b, err := ioutil.ReadFile(sourceFilename)
 	if err != nil {
@@ -229,13 +285,24 @@ func writeReleaseNotesToDocs(title, sourceFilename string) (string, error) {
 	}
 	defer f.Close()
 
+	fmTail := ""
+	if strings.Count(title, ".") > 1 {
+		// Bug fix release
+		fmTail = `
+images:
+- images/blog/hugo-bug-poster.png
+`
+	}
+
 	if _, err := f.WriteString(fmt.Sprintf(`
 ---
 date: %s
-title: %s
+title: %q
+description: %q
+categories: ["Releases"]%s
 ---
 
-	`, time.Now().Format("2006-01-02"), title)); err != nil {
+	`, time.Now().Format("2006-01-02"), title, title, fmTail)); err != nil {
 		return "", err
 	}
 

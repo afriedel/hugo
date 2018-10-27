@@ -16,9 +16,13 @@ package hugolib
 import (
 	"errors"
 	"fmt"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/gohugoio/hugo/helpers"
 )
 
 // pathPattern represents a string which builds up a URL from attributes
@@ -148,16 +152,25 @@ func pageToPermalinkDate(p *Page, dateField string) (string, error) {
 
 // pageToPermalinkTitle returns the URL-safe form of the title
 func pageToPermalinkTitle(p *Page, _ string) (string, error) {
-	// Page contains Node which has Title
-	// (also contains URLPath which has Slug, sometimes)
-	return p.s.PathSpec.URLize(p.Title), nil
+	if p.Kind == KindTaxonomy {
+		// Taxonomies are allowed to have '/' characters, so don't normalize
+		// them with MakeSegment.
+		return p.s.PathSpec.MakePathSanitized(p.title), nil
+	}
+
+	return p.s.PathSpec.MakeSegment(p.title), nil
 }
 
 // pageToPermalinkFilename returns the URL-safe form of the filename
 func pageToPermalinkFilename(p *Page, _ string) (string, error) {
-	//var extension = p.Source.Ext
-	//var name = p.Source.Path()[0 : len(p.Source.Path())-len(extension)]
-	return p.s.PathSpec.URLize(p.Source.TranslationBaseName()), nil
+	name := p.File.TranslationBaseName()
+	if name == "index" {
+		// Page bundles; the directory name will hopefully have a better name.
+		dir := strings.TrimSuffix(p.File.Dir(), helpers.FilePathSeparator)
+		_, name = filepath.Split(dir)
+	}
+
+	return p.s.PathSpec.MakeSegment(name), nil
 }
 
 // if the page has a slug, return the slug, else return the title
@@ -172,14 +185,30 @@ func pageToPermalinkSlugElseTitle(p *Page, a string) (string, error) {
 		if strings.HasSuffix(p.Slug, "-") {
 			p.Slug = p.Slug[0 : len(p.Slug)-1]
 		}
-		return p.s.PathSpec.URLize(p.Slug), nil
+		return p.s.PathSpec.MakeSegment(p.Slug), nil
 	}
 	return pageToPermalinkTitle(p, a)
 }
 
 func pageToPermalinkSection(p *Page, _ string) (string, error) {
 	// Page contains Node contains URLPath which has Section
-	return p.Section(), nil
+	return p.s.PathSpec.MakeSegment(p.Section()), nil
+}
+
+func pageToPermalinkSections(p *Page, _ string) (string, error) {
+	// TODO(bep) we have some superflous URLize in this file, but let's
+	// deal with that later.
+
+	cs := p.CurrentSection()
+	if cs == nil {
+		return "", errors.New("\":sections\" attribute requires parent page but is nil")
+	}
+
+	sections := make([]string, len(cs.sections))
+	for i := range cs.sections {
+		sections[i] = p.s.PathSpec.MakeSegment(cs.sections[i])
+	}
+	return path.Join(sections...), nil
 }
 
 func init() {
@@ -192,6 +221,7 @@ func init() {
 		"weekdayname": pageToPermalinkDate,
 		"yearday":     pageToPermalinkDate,
 		"section":     pageToPermalinkSection,
+		"sections":    pageToPermalinkSections,
 		"title":       pageToPermalinkTitle,
 		"slug":        pageToPermalinkSlugElseTitle,
 		"filename":    pageToPermalinkFilename,

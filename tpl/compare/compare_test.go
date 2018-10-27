@@ -21,10 +21,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gohugoio/hugo/helpers"
+
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type tstEqerType1 string
+type tstEqerType2 string
+
+func (t tstEqerType2) Eq(other interface{}) bool {
+	return cast.ToString(t) == cast.ToString(other)
+}
+
+func (t tstEqerType2) String() string {
+	return string(t)
+}
+
+func (t tstEqerType1) Eq(other interface{}) bool {
+	return cast.ToString(t) == cast.ToString(other)
+}
+
+func (t tstEqerType1) String() string {
+	return string(t)
+}
 
 type tstCompareType int
 
@@ -148,6 +169,21 @@ func doTestCompare(t *testing.T, tp tstCompareType, funcUnderTest func(a, b inte
 		{"a", "a", 0},
 		{"a", "b", -1},
 		{"b", "a", 1},
+		{tstEqerType1("a"), tstEqerType1("a"), 0},
+		{tstEqerType1("a"), tstEqerType2("a"), 0},
+		{tstEqerType2("a"), tstEqerType1("a"), 0},
+		{tstEqerType2("a"), tstEqerType1("b"), -1},
+		{helpers.MustParseHugoVersion("0.32.1").Version(), helpers.MustParseHugoVersion("0.32").Version(), 1},
+		{helpers.MustParseHugoVersion("0.35").Version(), helpers.MustParseHugoVersion("0.32").Version(), 1},
+		{helpers.MustParseHugoVersion("0.36").Version(), helpers.MustParseHugoVersion("0.36").Version(), 0},
+		{helpers.MustParseHugoVersion("0.32").Version(), helpers.MustParseHugoVersion("0.36").Version(), -1},
+		{helpers.MustParseHugoVersion("0.32").Version(), "0.36", -1},
+		{"0.36", helpers.MustParseHugoVersion("0.32").Version(), 1},
+		{"0.36", helpers.MustParseHugoVersion("0.36").Version(), 0},
+		{"0.37", helpers.MustParseHugoVersion("0.37-DEV").Version(), 1},
+		{"0.37-DEV", helpers.MustParseHugoVersion("0.37").Version(), -1},
+		{"0.36", helpers.MustParseHugoVersion("0.37-DEV").Version(), -1},
+		{"0.37-DEV", helpers.MustParseHugoVersion("0.37-DEV").Version(), 0},
 	} {
 		result := funcUnderTest(test.left, test.right)
 		success := false
@@ -197,4 +233,13 @@ func TestTimeUnix(t *testing.T) {
 		iv := reflect.ValueOf(sec)
 		toTimeUnix(iv)
 	}(t)
+}
+
+func TestConditional(t *testing.T) {
+	assert := require.New(t)
+	n := New()
+	a, b := "a", "b"
+
+	assert.Equal(a, n.Conditional(true, a, b))
+	assert.Equal(b, n.Conditional(false, a, b))
 }

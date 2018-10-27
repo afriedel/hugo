@@ -1,4 +1,4 @@
-// Copyright 2017 The Hugo Authors. All rights reserved.
+// Copyright 2018 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,19 +17,17 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io/ioutil"
-	"log"
 	"math/rand"
-	"os"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/spf13/hugo/config"
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
-	jww "github.com/spf13/jwalterweatherman"
+	"github.com/gohugoio/hugo/common/loggers"
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
+	"github.com/gohugoio/hugo/langs"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,12 +46,13 @@ func TestAfter(t *testing.T) {
 		expect interface{}
 	}{
 		{int(2), []string{"a", "b", "c", "d"}, []string{"c", "d"}},
-		{int32(3), []string{"a", "b"}, false},
+		{int32(3), []string{"a", "b"}, []string{}},
 		{int64(2), []int{100, 200, 300}, []int{300}},
-		{100, []int{100, 200}, false},
+		{100, []int{100, 200}, []int{}},
 		{"1", []int{100, 200, 300}, []int{200, 300}},
 		{int64(-1), []int{100, 200, 300}, false},
 		{"noint", []int{100, 200, 300}, false},
+		{2, []string{}, []string{}},
 		{1, nil, false},
 		{nil, []int{100}, false},
 		{1, t, false},
@@ -69,7 +68,60 @@ func TestAfter(t *testing.T) {
 		}
 
 		require.NoError(t, err, errMsg)
-		assert.Equal(t, test.expect, result, errMsg)
+		require.Equal(t, test.expect, result, errMsg)
+	}
+}
+
+type tstGrouper struct {
+}
+
+type tstGroupers []*tstGrouper
+
+func (g tstGrouper) Group(key interface{}, items interface{}) (interface{}, error) {
+	ilen := reflect.ValueOf(items).Len()
+	return fmt.Sprintf("%v(%d)", key, ilen), nil
+}
+
+type tstGrouper2 struct {
+}
+
+func (g *tstGrouper2) Group(key interface{}, items interface{}) (interface{}, error) {
+	ilen := reflect.ValueOf(items).Len()
+	return fmt.Sprintf("%v(%d)", key, ilen), nil
+}
+
+func TestGroup(t *testing.T) {
+	t.Parallel()
+
+	ns := New(&deps.Deps{})
+
+	for i, test := range []struct {
+		key    interface{}
+		items  interface{}
+		expect interface{}
+	}{
+		{"a", []*tstGrouper{{}, {}}, "a(2)"},
+		{"b", tstGroupers{&tstGrouper{}, &tstGrouper{}}, "b(2)"},
+		{"a", []tstGrouper{{}, {}}, "a(2)"},
+		{"a", []*tstGrouper2{{}, {}}, "a(2)"},
+		{"b", []tstGrouper2{{}, {}}, "b(2)"},
+		{"a", []*tstGrouper{}, "a(0)"},
+		{"a", []string{"a", "b"}, false},
+		{"a", "asdf", false},
+		{"a", nil, false},
+		{nil, []*tstGrouper{{}, {}}, false},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		result, err := ns.Group(test.key, test.items)
+
+		if b, ok := test.expect.(bool); ok && !b {
+			require.Error(t, err, errMsg)
+			continue
+		}
+
+		require.NoError(t, err, errMsg)
+		require.Equal(t, test.expect, result, errMsg)
 	}
 }
 
@@ -200,6 +252,7 @@ func TestFirst(t *testing.T) {
 		{int64(2), []int{100, 200, 300}, []int{100, 200}},
 		{100, []int{100, 200}, []int{100, 200}},
 		{"1", []int{100, 200, 300}, []int{100}},
+		{0, []string{"h", "u", "g", "o"}, []string{}},
 		{int64(-1), []int{100, 200, 300}, false},
 		{"noint", []int{100, 200, 300}, false},
 		{1, nil, false},
@@ -244,10 +297,13 @@ func TestIn(t *testing.T) {
 		{[]int{1, 2, 4}, 3, false},
 		{[]float64{1.23, 2.45, 4.67}, 1.23, true},
 		{[]float64{1.234567, 2.45, 4.67}, 1.234568, false},
+		{[]float64{1, 2, 3}, 1, true},
+		{[]float32{1, 2, 3}, 1, true},
 		{"this substring should be found", "substring", true},
 		{"this substring should not be found", "subseastring", false},
 		{nil, "foo", false},
 	} {
+
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result := ns.In(test.l1, test.l2)
@@ -255,10 +311,33 @@ func TestIn(t *testing.T) {
 	}
 }
 
+type page struct {
+	Title string
+}
+
+func (p page) String() string {
+	return "p-" + p.Title
+}
+
+type pagesPtr []*page
+type pagesVals []page
+
 func TestIntersect(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
+
+	var (
+		p1 = &page{"A"}
+		p2 = &page{"B"}
+		p3 = &page{"C"}
+		p4 = &page{"D"}
+
+		p1v = page{"A"}
+		p2v = page{"B"}
+		p3v = page{"C"}
+		p4v = page{"D"}
+	)
 
 	for i, test := range []struct {
 		l1, l2 interface{}
@@ -277,9 +356,6 @@ func TestIntersect(t *testing.T) {
 		{[]int{2, 4}, []int{1, 2, 4}, []int{2, 4}},
 		{[]int{1, 2, 4}, []int{3, 6}, []int{}},
 		{[]float64{2.2, 4.4}, []float64{1.1, 2.2, 4.4}, []float64{2.2, 4.4}},
-		// errors
-		{"not array or slice", []string{"a"}, false},
-		{[]string{"a"}, "not array or slice", false},
 
 		// []interface{} ∩ []interface{}
 		{[]interface{}{"a", "b", "c"}, []interface{}{"a", "b", "b"}, []interface{}{"a", "b"}},
@@ -298,6 +374,7 @@ func TestIntersect(t *testing.T) {
 		{[]interface{}{int16(1), int16(2), int16(3)}, []int16{1, 2, 2}, []interface{}{int16(1), int16(2)}},
 		{[]interface{}{int32(1), int32(2), int32(3)}, []int32{1, 2, 2}, []interface{}{int32(1), int32(2)}},
 		{[]interface{}{int64(1), int64(2), int64(3)}, []int64{1, 2, 2}, []interface{}{int64(1), int64(2)}},
+		{[]interface{}{uint(1), uint(2), uint(3)}, []uint{1, 2, 2}, []interface{}{uint(1), uint(2)}},
 		{[]interface{}{float32(1), float32(2), float32(3)}, []float32{1, 2, 2}, []interface{}{float32(1), float32(2)}},
 		{[]interface{}{float64(1), float64(2), float64(3)}, []float64{1, 2, 2}, []interface{}{float64(1), float64(2)}},
 
@@ -310,7 +387,27 @@ func TestIntersect(t *testing.T) {
 		{[]int64{1, 2, 3}, []interface{}{int64(1), int64(2), int64(2)}, []int64{1, 2}},
 		{[]float32{1, 2, 3}, []interface{}{float32(1), float32(2), float32(2)}, []float32{1, 2}},
 		{[]float64{1, 2, 3}, []interface{}{float64(1), float64(2), float64(2)}, []float64{1, 2}},
+
+		// Structs
+		{pagesPtr{p1, p4, p2, p3}, pagesPtr{p4, p2, p2}, pagesPtr{p4, p2}},
+		{pagesVals{p1v, p4v, p2v, p3v}, pagesVals{p1v, p3v, p3v}, pagesVals{p1v, p3v}},
+		{[]interface{}{p1, p4, p2, p3}, []interface{}{p4, p2, p2}, []interface{}{p4, p2}},
+		{[]interface{}{p1v, p4v, p2v, p3v}, []interface{}{p1v, p3v, p3v}, []interface{}{p1v, p3v}},
+		{pagesPtr{p1, p4, p2, p3}, pagesPtr{}, pagesPtr{}},
+		{pagesVals{}, pagesVals{p1v, p3v, p3v}, pagesVals{}},
+		{[]interface{}{p1, p4, p2, p3}, []interface{}{}, []interface{}{}},
+		{[]interface{}{}, []interface{}{p1v, p3v, p3v}, []interface{}{}},
+
+		// errors
+		{"not array or slice", []string{"a"}, false},
+		{[]string{"a"}, "not array or slice", false},
+
+		// uncomparable types - #3820
+		{[]map[int]int{{1: 1}, {2: 2}}, []map[int]int{{2: 2}, {3: 3}}, false},
+		{[][]int{{1, 1}, {1, 2}}, [][]int{{1, 2}, {1, 2}, {1, 3}}, false},
+		{[]int{1, 1}, [][]int{{1, 2}, {1, 2}, {1, 3}}, false},
 	} {
+
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result, err := ns.Intersect(test.l1, test.l2)
@@ -321,36 +418,40 @@ func TestIntersect(t *testing.T) {
 		}
 
 		assert.NoError(t, err, errMsg)
-		assert.Equal(t, test.expect, result, errMsg)
+		if !reflect.DeepEqual(result, test.expect) {
+			t.Fatalf("[%d] Got\n%v expected\n%v", i, result, test.expect)
+		}
 	}
 }
 
 func TestIsSet(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	ns := newTestNs()
 
 	for i, test := range []struct {
 		a      interface{}
 		key    interface{}
 		expect bool
 		isErr  bool
-		errStr string
 	}{
-		{[]interface{}{1, 2, 3, 5}, 2, true, false, ""},
-		{[]interface{}{1, 2, 3, 5}, 22, false, false, ""},
+		{[]interface{}{1, 2, 3, 5}, 2, true, false},
+		{[]interface{}{1, 2, 3, 5}, "2", true, false},
+		{[]interface{}{1, 2, 3, 5}, 2.0, true, false},
 
-		{map[string]interface{}{"a": 1, "b": 2}, "b", true, false, ""},
-		{map[string]interface{}{"a": 1, "b": 2}, "bc", false, false, ""},
+		{[]interface{}{1, 2, 3, 5}, 22, false, false},
 
-		{time.Now(), "Day", false, false, ""},
-		{nil, "nil", false, false, ""},
+		{map[string]interface{}{"a": 1, "b": 2}, "b", true, false},
+		{map[string]interface{}{"a": 1, "b": 2}, "bc", false, false},
+
+		{time.Now(), "Day", false, false},
+		{nil, "nil", false, false},
+		{[]interface{}{1, 2, 3, 5}, TstX{}, false, true},
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result, err := ns.IsSet(test.a, test.key)
 		if test.isErr {
-			assert.EqualError(t, err, test.errStr, errMsg)
 			continue
 		}
 
@@ -539,25 +640,30 @@ func TestShuffleRandomising(t *testing.T) {
 	}
 }
 
+// Also see tests in commons/collection.
 func TestSlice(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
 
 	for i, test := range []struct {
-		args []interface{}
+		args     []interface{}
+		expected interface{}
 	}{
-		{[]interface{}{"a", "b"}},
-		// errors
-		{[]interface{}{5, "b"}},
-		{[]interface{}{tstNoStringer{}}},
+		{[]interface{}{"a", "b"}, []string{"a", "b"}},
+		{[]interface{}{}, []interface{}{}},
+		{[]interface{}{nil}, []interface{}{nil}},
+		{[]interface{}{5, "b"}, []interface{}{5, "b"}},
+		{[]interface{}{tstNoStringer{}}, []tstNoStringer{{}}},
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test.args)
 
 		result := ns.Slice(test.args...)
 
-		assert.Equal(t, test.args, result, errMsg)
+		assert.Equal(t, test.expected, result, errMsg)
 	}
+
+	assert.Len(t, ns.Slice(), 0)
 }
 
 func TestUnion(t *testing.T) {
@@ -565,34 +671,128 @@ func TestUnion(t *testing.T) {
 
 	ns := New(&deps.Deps{})
 
+	var (
+		p1 = &page{"A"}
+		p2 = &page{"B"}
+		//		p3 = &page{"C"}
+		p4 = &page{"D"}
+
+		p1v = page{"A"}
+		//p2v = page{"B"}
+		p3v = page{"C"}
+		//p4v = page{"D"}
+	)
+
 	for i, test := range []struct {
 		l1     interface{}
 		l2     interface{}
 		expect interface{}
 		isErr  bool
 	}{
+		{nil, nil, []interface{}{}, false},
+		{nil, []string{"a", "b"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, nil, []string{"a", "b"}, false},
+
+		// []A ∪ []B
+		{[]string{"1", "2"}, []int{3}, []string{}, false},
+		{[]int{1, 2}, []string{"1", "2"}, []int{}, false},
+
+		// []T ∪ []T
 		{[]string{"a", "b", "c", "c"}, []string{"a", "b", "b"}, []string{"a", "b", "c"}, false},
 		{[]string{"a", "b"}, []string{"a", "b", "c"}, []string{"a", "b", "c"}, false},
 		{[]string{"a", "b", "c"}, []string{"d", "e"}, []string{"a", "b", "c", "d", "e"}, false},
 		{[]string{}, []string{}, []string{}, false},
-		{[]string{"a", "b"}, nil, []string{"a", "b"}, false},
-		{nil, []string{"a", "b"}, []string{"a", "b"}, false},
-		{nil, nil, make([]interface{}, 0), true},
-		{[]string{"1", "2"}, []int{1, 2}, make([]string, 0), false},
-		{[]int{1, 2}, []string{"1", "2"}, make([]int, 0), false},
 		{[]int{1, 2, 3}, []int{3, 4, 5}, []int{1, 2, 3, 4, 5}, false},
 		{[]int{1, 2, 3}, []int{1, 2, 3}, []int{1, 2, 3}, false},
 		{[]int{1, 2, 4}, []int{2, 4}, []int{1, 2, 4}, false},
 		{[]int{2, 4}, []int{1, 2, 4}, []int{2, 4, 1}, false},
 		{[]int{1, 2, 4}, []int{3, 6}, []int{1, 2, 4, 3, 6}, false},
 		{[]float64{2.2, 4.4}, []float64{1.1, 2.2, 4.4}, []float64{2.2, 4.4, 1.1}, false},
+		{[]interface{}{"a", "b", "c", "c"}, []interface{}{"a", "b", "b"}, []interface{}{"a", "b", "c"}, false},
+
+		// []T ∪ []interface{}
+		{[]string{"1", "2"}, []interface{}{"9"}, []string{"1", "2", "9"}, false},
+		{[]int{2, 4}, []interface{}{1, 2, 4}, []int{2, 4, 1}, false},
+		{[]int8{2, 4}, []interface{}{int8(1), int8(2), int8(4)}, []int8{2, 4, 1}, false},
+		{[]int8{2, 4}, []interface{}{1, 2, 4}, []int8{2, 4, 1}, false},
+		{[]int16{2, 4}, []interface{}{1, 2, 4}, []int16{2, 4, 1}, false},
+		{[]int32{2, 4}, []interface{}{1, 2, 4}, []int32{2, 4, 1}, false},
+		{[]int64{2, 4}, []interface{}{1, 2, 4}, []int64{2, 4, 1}, false},
+
+		{[]float64{2.2, 4.4}, []interface{}{1.1, 2.2, 4.4}, []float64{2.2, 4.4, 1.1}, false},
+		{[]float32{2.2, 4.4}, []interface{}{1.1, 2.2, 4.4}, []float32{2.2, 4.4, 1.1}, false},
+
+		// []interface{} ∪ []T
+		{[]interface{}{"a", "b", "c", "c"}, []string{"a", "b", "d"}, []interface{}{"a", "b", "c", "d"}, false},
+		{[]interface{}{}, []string{}, []interface{}{}, false},
+		{[]interface{}{1, 2}, []int{2, 3}, []interface{}{1, 2, 3}, false},
+		{[]interface{}{1, 2}, []int8{2, 3}, []interface{}{1, 2, 3}, false}, // 28
+		{[]interface{}{uint(1), uint(2)}, []uint{2, 3}, []interface{}{uint(1), uint(2), uint(3)}, false},
+		{[]interface{}{1.1, 2.2}, []float64{2.2, 3.3}, []interface{}{1.1, 2.2, 3.3}, false},
+
+		// Structs
+		{pagesPtr{p1, p4}, pagesPtr{p4, p2, p2}, pagesPtr{p1, p4, p2}, false},
+		{pagesVals{p1v}, pagesVals{p3v, p3v}, pagesVals{p1v, p3v}, false},
+		{[]interface{}{p1, p4}, []interface{}{p4, p2, p2}, []interface{}{p1, p4, p2}, false},
+		{[]interface{}{p1v}, []interface{}{p3v, p3v}, []interface{}{p1v, p3v}, false},
+		// #3686
+		{[]interface{}{p1v}, []interface{}{}, []interface{}{p1v}, false},
+		{[]interface{}{}, []interface{}{p1v}, []interface{}{p1v}, false},
+		{pagesPtr{p1}, pagesPtr{}, pagesPtr{p1}, false},
+		{pagesVals{p1v}, pagesVals{}, pagesVals{p1v}, false},
+		{pagesPtr{}, pagesPtr{p1}, pagesPtr{p1}, false},
+		{pagesVals{}, pagesVals{p1v}, pagesVals{p1v}, false},
+
 		// errors
 		{"not array or slice", []string{"a"}, false, true},
 		{[]string{"a"}, "not array or slice", false, true},
+
+		// uncomparable types - #3820
+		{[]map[string]int{{"K1": 1}}, []map[string]int{{"K2": 2}, {"K2": 2}}, false, true},
+		{[][]int{{1, 1}, {1, 2}}, [][]int{{2, 1}, {2, 2}}, false, true},
 	} {
+
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result, err := ns.Union(test.l1, test.l2)
+		if test.isErr {
+			assert.Error(t, err, errMsg)
+			continue
+		}
+
+		assert.NoError(t, err, errMsg)
+		if !reflect.DeepEqual(result, test.expect) {
+			t.Fatalf("[%d] Got\n%v expected\n%v", i, result, test.expect)
+		}
+	}
+}
+
+func TestUniq(t *testing.T) {
+	t.Parallel()
+
+	ns := New(&deps.Deps{})
+	for i, test := range []struct {
+		l      interface{}
+		expect interface{}
+		isErr  bool
+	}{
+		{[]string{"a", "b", "c"}, []string{"a", "b", "c"}, false},
+		{[]string{"a", "b", "c", "c"}, []string{"a", "b", "c"}, false},
+		{[]string{"a", "b", "b", "c"}, []string{"a", "b", "c"}, false},
+		{[]string{"a", "b", "c", "b"}, []string{"a", "b", "c"}, false},
+		{[]int{1, 2, 3}, []int{1, 2, 3}, false},
+		{[]int{1, 2, 3, 3}, []int{1, 2, 3}, false},
+		{[]int{1, 2, 2, 3}, []int{1, 2, 3}, false},
+		{[]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
+		{[4]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
+		{nil, make([]interface{}, 0), false},
+		// should-errors
+		{1, 1, true},
+		{"foo", "fo", true},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		result, err := ns.Uniq(test.l)
 		if test.isErr {
 			assert.Error(t, err, errMsg)
 			continue
@@ -643,12 +843,22 @@ type TstX struct {
 }
 
 func newDeps(cfg config.Provider) *deps.Deps {
-	l := helpers.NewLanguage("en", cfg)
+	l := langs.NewLanguage("en", cfg)
 	l.Set("i18nDir", "i18n")
+	cs, err := helpers.NewContentSpec(l)
+	if err != nil {
+		panic(err)
+	}
 	return &deps.Deps{
 		Cfg:         cfg,
 		Fs:          hugofs.NewMem(l),
-		ContentSpec: helpers.NewContentSpec(l),
-		Log:         jww.NewNotepad(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, "", log.Ldate|log.Ltime),
+		ContentSpec: cs,
+		Log:         loggers.NewErrorLogger(),
 	}
+}
+
+func newTestNs() *Namespace {
+	v := viper.New()
+	v.Set("contentDir", "content")
+	return New(newDeps(v))
 }

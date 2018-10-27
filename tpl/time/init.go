@@ -14,8 +14,8 @@
 package time
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "time"
@@ -62,6 +62,20 @@ func init() {
 			nil,
 			[][2]string{
 				{`{{ (time "2015-01-21").Year }}`, `2015`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Duration,
+			[]string{"duration"},
+			[][2]string{
+				{`{{ mul 60 60 | duration "second" }}`, `1h0m0s`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.ParseDuration,
+			nil,
+			[][2]string{
+				{`{{ "1h12m10s" | time.ParseDuration }}`, `1h12m10s`},
 			},
 		)
 

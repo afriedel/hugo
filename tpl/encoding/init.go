@@ -14,8 +14,8 @@
 package encoding
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "encoding"
@@ -47,7 +47,7 @@ func init() {
 		ns.AddMethodMapping(ctx.Jsonify,
 			[]string{"jsonify"},
 			[][2]string{
-				{`{{ (slice "A" "B" "C") | jsonify }}`, `["A","B","C"]`},
+				{`{{ (slice "A" "B" "C") | jsonify }}`, "[\n  \"A\",\n  \"B\",\n  \"C\"\n]"},
 			},
 		)
 

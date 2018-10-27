@@ -18,10 +18,11 @@ import (
 	"html/template"
 	"testing"
 
-	"github.com/spf13/hugo/config"
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
+	"github.com/gohugoio/hugo/langs"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,9 @@ type tstNoStringer struct{}
 func TestEmojify(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -60,7 +63,9 @@ func TestEmojify(t *testing.T) {
 func TestHighlight(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -69,6 +74,8 @@ func TestHighlight(t *testing.T) {
 		expect interface{}
 	}{
 		{"func boo() {}", "go", "", "boo"},
+		// Issue #4179
+		{`<Foo attr=" &lt; "></Foo>`, "xml", "", `&amp;lt;`},
 		{tstNoStringer{}, "go", "", false},
 	} {
 		errMsg := fmt.Sprintf("[%d]", i)
@@ -81,14 +88,16 @@ func TestHighlight(t *testing.T) {
 		}
 
 		require.NoError(t, err, errMsg)
-		assert.Contains(t, result, "boo", errMsg)
+		assert.Contains(t, result, test.expect.(string), errMsg)
 	}
 }
 
 func TestHTMLEscape(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -116,7 +125,9 @@ func TestHTMLEscape(t *testing.T) {
 func TestHTMLUnescape(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -144,7 +155,9 @@ func TestHTMLUnescape(t *testing.T) {
 func TestMarkdownify(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -168,10 +181,42 @@ func TestMarkdownify(t *testing.T) {
 	}
 }
 
+// Issue #3040
+func TestMarkdownifyBlocksOfText(t *testing.T) {
+	t.Parallel()
+
+	assert := require.New(t)
+
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
+
+	text := `
+#First 
+
+This is some *bold* text.
+
+## Second
+
+This is some more text.
+
+And then some.
+`
+
+	result, err := ns.Markdownify(text)
+	assert.NoError(err)
+	assert.Equal(template.HTML(
+		"<p>#First</p>\n\n<p>This is some <em>bold</em> text.</p>\n\n<h2 id=\"second\">Second</h2>\n\n<p>This is some more text.</p>\n\n<p>And then some.</p>\n"),
+		result)
+
+}
+
 func TestPlainify(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	v := viper.New()
+	v.Set("contentDir", "content")
+	ns := New(newDeps(v))
 
 	for i, test := range []struct {
 		s      interface{}
@@ -196,11 +241,16 @@ func TestPlainify(t *testing.T) {
 }
 
 func newDeps(cfg config.Provider) *deps.Deps {
-	l := helpers.NewLanguage("en", cfg)
+	l := langs.NewLanguage("en", cfg)
 	l.Set("i18nDir", "i18n")
+	cs, err := helpers.NewContentSpec(l)
+	if err != nil {
+		panic(err)
+	}
+
 	return &deps.Deps{
 		Cfg:         cfg,
 		Fs:          hugofs.NewMem(l),
-		ContentSpec: helpers.NewContentSpec(l),
+		ContentSpec: cs,
 	}
 }

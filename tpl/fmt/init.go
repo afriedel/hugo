@@ -14,15 +14,15 @@
 package fmt
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "fmt"
 
 func init() {
 	f := func(d *deps.Deps) *internal.TemplateFuncsNamespace {
-		ctx := New()
+		ctx := New(d)
 
 		ns := &internal.TemplateFuncsNamespace{
 			Name:    name,
@@ -50,8 +50,14 @@ func init() {
 			},
 		)
 
-		return ns
+		ns.AddMethodMapping(ctx.Errorf,
+			[]string{"errorf"},
+			[][2]string{
+				{`{{ errorf "%s." "failed" }}`, `failed.`},
+			},
+		)
 
+		return ns
 	}
 
 	internal.AddTemplateFuncsNamespace(f)

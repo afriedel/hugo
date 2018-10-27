@@ -16,7 +16,6 @@
 package releaser
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -24,48 +23,42 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 
-	"github.com/spf13/hugo/helpers"
+	"github.com/pkg/errors"
+
+	"github.com/gohugoio/hugo/helpers"
 )
 
 const commitPrefix = "releaser:"
 
+type releaseNotesState int
+
+const (
+	releaseNotesNone = iota
+	releaseNotesCreated
+	releaseNotesReady
+)
+
+// ReleaseHandler provides functionality to release a new version of Hugo.
 type ReleaseHandler struct {
-	patch       int
-	step        int
+	cliVersion string
+
 	skipPublish bool
+
+	// Just simulate, no actual changes.
+	try bool
+
+	git func(args ...string) (string, error)
 }
 
-func (r ReleaseHandler) shouldRelease() bool {
-	return r.step < 1 || r.shouldContinue()
-}
+func (r ReleaseHandler) calculateVersions() (helpers.HugoVersion, helpers.HugoVersion) {
+	newVersion := helpers.MustParseHugoVersion(r.cliVersion)
+	finalVersion := newVersion.Next()
+	finalVersion.PatchLevel = 0
 
-func (r ReleaseHandler) shouldContinue() bool {
-	return r.step == 2
-}
-
-func (r ReleaseHandler) shouldPrepare() bool {
-	return r.step < 1 || r.step == 1
-}
-
-func (r ReleaseHandler) calculateVersions(current helpers.HugoVersion) (helpers.HugoVersion, helpers.HugoVersion) {
-	var (
-		newVersion   = current
-		finalVersion = current
-	)
-
-	newVersion.Suffix = ""
-
-	if r.shouldContinue() {
-		// The version in the current code base is in the state we want for
-		// the release.
-		if r.patch == 0 {
-			finalVersion = newVersion.Next()
-		}
-	} else if r.patch > 0 {
-		newVersion = helpers.CurrentHugoVersion.NextPatchLevel(r.patch)
-	} else {
-		finalVersion = newVersion.Next()
+	if newVersion.Suffix != "-test" {
+		newVersion.Suffix = ""
 	}
 
 	finalVersion.Suffix = "-DEV"
@@ -73,16 +66,32 @@ func (r ReleaseHandler) calculateVersions(current helpers.HugoVersion) (helpers.
 	return newVersion, finalVersion
 }
 
-func New(patch, step int, skipPublish bool) *ReleaseHandler {
-	return &ReleaseHandler{patch: patch, step: step, skipPublish: skipPublish}
+// New initialises a ReleaseHandler.
+func New(version string, skipPublish, try bool) *ReleaseHandler {
+	// When triggered from CI release branch
+	version = strings.TrimPrefix(version, "release-")
+	version = strings.TrimPrefix(version, "v")
+	rh := &ReleaseHandler{cliVersion: version, skipPublish: skipPublish, try: try}
+
+	if try {
+		rh.git = func(args ...string) (string, error) {
+			fmt.Println("git", strings.Join(args, " "))
+			return "", nil
+		}
+	} else {
+		rh.git = git
+	}
+
+	return rh
 }
 
+// Run creates a new release.
 func (r *ReleaseHandler) Run() error {
 	if os.Getenv("GITHUB_TOKEN") == "" {
 		return errors.New("GITHUB_TOKEN not set, create one here with the repo scope selected: https://github.com/settings/tokens/new")
 	}
 
-	newVersion, finalVersion := r.calculateVersions(helpers.CurrentHugoVersion)
+	newVersion, finalVersion := r.calculateVersions()
 
 	version := newVersion.String()
 	tag := "v" + version
@@ -100,7 +109,7 @@ func (r *ReleaseHandler) Run() error {
 	var changeLogFromTag string
 
 	if newVersion.PatchLevel == 0 {
-		// There may have been patch releases inbetween, so set the tag explicitly.
+		// There may have been patch releases between, so set the tag explicitly.
 		changeLogFromTag = "v" + newVersion.Prev().String()
 		exists, _ := tagExists(changeLogFromTag)
 		if !exists {
@@ -109,110 +118,160 @@ func (r *ReleaseHandler) Run() error {
 		}
 	}
 
-	var gitCommits gitInfos
+	var (
+		gitCommits     gitInfos
+		gitCommitsDocs gitInfos
+		relNotesState  releaseNotesState
+	)
 
-	if r.shouldPrepare() || r.shouldRelease() {
-		gitCommits, err = getGitInfos(changeLogFromTag, true)
-		if err != nil {
-			return err
-		}
-	}
-
-	if r.shouldPrepare() {
-		releaseNotesFile, err := writeReleaseNotesToDocsTemp(version, gitCommits)
-		if err != nil {
-			return err
-		}
-
-		if _, err := git("add", releaseNotesFile); err != nil {
-			return err
-		}
-		if _, err := git("commit", "-m", fmt.Sprintf("%s Add relase notes draft for release of %s\n\n[ci skip]", commitPrefix, newVersion)); err != nil {
-			return err
-		}
-	}
-
-	if !r.shouldRelease() {
-		fmt.Println("Skip release ... Use --state=2 to continue.")
-		return nil
-	}
-
-	if err := bumpVersions(newVersion); err != nil {
-		return err
-	}
-
-	if _, err := git("commit", "-a", "-m", fmt.Sprintf("%s Bump versions for release of %s\n\n[ci skip]", commitPrefix, newVersion)); err != nil {
-		return err
-	}
-
-	releaseNotesFile := getRelaseNotesDocsTempFilename(version)
-
-	// Write the release notes to the docs site as well.
-	docFile, err := writeReleaseNotesToDocs(version, releaseNotesFile)
+	relNotesState, err = r.releaseNotesState(version)
 	if err != nil {
 		return err
 	}
 
-	if _, err := git("add", docFile); err != nil {
-		return err
+	prepareRelaseNotes := relNotesState == releaseNotesNone
+	shouldRelease := relNotesState == releaseNotesReady
+
+	defer r.gitPush() // TODO(bep)
+
+	if prepareRelaseNotes || shouldRelease {
+		gitCommits, err = getGitInfos(changeLogFromTag, "hugo", "", !r.try)
+		if err != nil {
+			return err
+		}
+
+		// TODO(bep) explicit tag?
+		gitCommitsDocs, err = getGitInfos("", "hugoDocs", "../hugoDocs", !r.try)
+		if err != nil {
+			return err
+		}
 	}
-	if _, err := git("commit", "-m", fmt.Sprintf("%s Add relase notes to /docs for release of %s\n\n[ci skip]", commitPrefix, newVersion)); err != nil {
+
+	if relNotesState == releaseNotesCreated {
+		fmt.Println("Release notes created, but not ready. Reneame to *-ready.md to continue ...")
+		return nil
+	}
+
+	if prepareRelaseNotes {
+		releaseNotesFile, err := r.writeReleaseNotesToTemp(version, gitCommits, gitCommitsDocs)
+		if err != nil {
+			return err
+		}
+
+		if _, err := r.git("add", releaseNotesFile); err != nil {
+			return err
+		}
+		if _, err := r.git("commit", "-m", fmt.Sprintf("%s Add release notes draft for %s\n\nRename to *-ready.md to continue. [ci skip]", commitPrefix, newVersion)); err != nil {
+			return err
+		}
+	}
+
+	if !shouldRelease {
+		fmt.Printf("Skip release ... ")
+		return nil
+	}
+
+	// For docs, for now we assume that:
+	// The /docs subtree is up to date and ready to go.
+	// The hugoDocs/dev and hugoDocs/master must be merged manually after release.
+	// TODO(bep) improve this when we see how it works.
+
+	if err := r.bumpVersions(newVersion); err != nil {
 		return err
 	}
 
-	if _, err := git("tag", "-a", tag, "-m", fmt.Sprintf("%s %s [ci deploy]", commitPrefix, newVersion)); err != nil {
+	if _, err := r.git("commit", "-a", "-m", fmt.Sprintf("%s Bump versions for release of %s\n\n[ci skip]", commitPrefix, newVersion)); err != nil {
 		return err
 	}
 
-	if _, err := git("push", "origin", tag); err != nil {
+	releaseNotesFile := getReleaseNotesDocsTempFilename(version, true)
+
+	// Write the release notes to the docs site as well.
+	docFile, err := r.writeReleaseNotesToDocs(version, releaseNotesFile)
+	if err != nil {
 		return err
+	}
+
+	if _, err := r.git("add", docFile); err != nil {
+		return err
+	}
+	if _, err := r.git("commit", "-m", fmt.Sprintf("%s Add release notes to /docs for release of %s\n\n[ci skip]", commitPrefix, newVersion)); err != nil {
+		return err
+	}
+
+	if _, err := r.git("tag", "-a", tag, "-m", fmt.Sprintf("%s %s [ci skip]", commitPrefix, newVersion)); err != nil {
+		return err
+	}
+
+	if !r.skipPublish {
+		if _, err := r.git("push", "origin", tag); err != nil {
+			return err
+		}
 	}
 
 	if err := r.release(releaseNotesFile); err != nil {
 		return err
 	}
 
-	if err := bumpVersions(finalVersion); err != nil {
+	if err := r.bumpVersions(finalVersion); err != nil {
 		return err
 	}
 
-	// No longer needed.
-	if err := os.Remove(releaseNotesFile); err != nil {
-		return err
+	if !r.try {
+		// No longer needed.
+		if err := os.Remove(releaseNotesFile); err != nil {
+			return err
+		}
 	}
 
-	if _, err := git("commit", "-a", "-m", fmt.Sprintf("%s Prepare repository for %s\n\n[ci skip]", commitPrefix, finalVersion)); err != nil {
+	if _, err := r.git("commit", "-a", "-m", fmt.Sprintf("%s Prepare repository for %s\n\n[ci skip]", commitPrefix, finalVersion)); err != nil {
 		return err
 	}
 
 	return nil
 }
 
+func (r *ReleaseHandler) gitPush() {
+	if r.skipPublish {
+		return
+	}
+	if _, err := r.git("push", "origin", "HEAD"); err != nil {
+		log.Fatal("push failed:", err)
+	}
+}
+
 func (r *ReleaseHandler) release(releaseNotesFile string) error {
-	cmd := exec.Command("goreleaser", "--release-notes", releaseNotesFile, "--skip-publish="+fmt.Sprint(r.skipPublish))
+	if r.try {
+		fmt.Println("Skip goreleaser...")
+		return nil
+	}
+
+	args := []string{"--rm-dist", "--release-notes", releaseNotesFile}
+	if r.skipPublish {
+		args = append(args, "--skip-publish")
+	}
+
+	cmd := exec.Command("goreleaser", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("goreleaser failed: %s", err)
+		return errors.Wrap(err, "goreleaser failed")
 	}
 	return nil
 }
 
-func bumpVersions(ver helpers.HugoVersion) error {
-	fromDev := ""
+func (r *ReleaseHandler) bumpVersions(ver helpers.HugoVersion) error {
 	toDev := ""
 
 	if ver.Suffix != "" {
-		toDev = "-DEV"
-	} else {
-		fromDev = "-DEV"
+		toDev = ver.Suffix
 	}
 
-	if err := replaceInFile("helpers/hugo.go",
+	if err := r.replaceInFile("helpers/hugo.go",
 		`Number:(\s{4,})(.*),`, fmt.Sprintf(`Number:${1}%.2f,`, ver.Number),
 		`PatchLevel:(\s*)(.*),`, fmt.Sprintf(`PatchLevel:${1}%d,`, ver.PatchLevel),
-		fmt.Sprintf(`Suffix:(\s{4,})"%s",`, fromDev), fmt.Sprintf(`Suffix:${1}"%s",`, toDev)); err != nil {
+		`Suffix:(\s{4,})".*",`, fmt.Sprintf(`Suffix:${1}"%s",`, toDev)); err != nil {
 		return err
 	}
 
@@ -220,7 +279,7 @@ func bumpVersions(ver helpers.HugoVersion) error {
 	if ver.Suffix != "" {
 		snapcraftGrade = "devel"
 	}
-	if err := replaceInFile("snapcraft.yaml",
+	if err := r.replaceInFile("snap/snapcraft.yaml",
 		`version: "(.*)"`, fmt.Sprintf(`version: "%s"`, ver),
 		`grade: (.*) #`, fmt.Sprintf(`grade: %s #`, snapcraftGrade)); err != nil {
 		return err
@@ -235,13 +294,13 @@ func bumpVersions(ver helpers.HugoVersion) error {
 		minVersion = ver.String()
 	}
 
-	if err := replaceInFile("commands/new.go",
+	if err := r.replaceInFile("commands/new.go",
 		`min_version = "(.*)"`, fmt.Sprintf(`min_version = "%s"`, minVersion)); err != nil {
 		return err
 	}
 
 	// docs/config.toml
-	if err := replaceInFile("docs/config.toml",
+	if err := r.replaceInFile("docs/config.toml",
 		`release = "(.*)"`, fmt.Sprintf(`release = "%s"`, ver)); err != nil {
 		return err
 	}
@@ -249,11 +308,16 @@ func bumpVersions(ver helpers.HugoVersion) error {
 	return nil
 }
 
-func replaceInFile(filename string, oldNew ...string) error {
+func (r *ReleaseHandler) replaceInFile(filename string, oldNew ...string) error {
 	fullFilename := hugoFilepath(filename)
 	fi, err := os.Stat(fullFilename)
 	if err != nil {
 		return err
+	}
+
+	if r.try {
+		fmt.Printf("Replace in %q: %q\n", filename, oldNew)
+		return nil
 	}
 
 	b, err := ioutil.ReadFile(fullFilename)
@@ -276,4 +340,8 @@ func hugoFilepath(filename string) string {
 		log.Fatal(err)
 	}
 	return filepath.Join(pwd, filename)
+}
+
+func isCI() bool {
+	return os.Getenv("CI") != ""
 }

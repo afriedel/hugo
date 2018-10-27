@@ -14,8 +14,8 @@
 package urls
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "urls"
@@ -57,6 +57,13 @@ func init() {
 		ns.AddMethodMapping(ctx.URLize,
 			[]string{"urlize"},
 			[][2]string{},
+		)
+
+		ns.AddMethodMapping(ctx.Anchorize,
+			[]string{"anchorize"},
+			[][2]string{
+				{`{{ "This is a title" | anchorize }}`, `this-is-a-title`},
+			},
 		)
 
 		return ns

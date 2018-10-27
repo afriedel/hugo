@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2018 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,11 @@
 package hugolib
 
 import (
-	"github.com/spf13/cast"
+	"github.com/gohugoio/hugo/helpers"
+
 	"sort"
+
+	"github.com/spf13/cast"
 )
 
 var spc = newPageCache()
@@ -97,6 +100,12 @@ func (ps *pageSorter) Less(i, j int) bool { return ps.by(ps.pages[i], ps.pages[j
 // Sort sorts the pages by the default sort order defined:
 // Order by Weight, Date, LinkTitle and then full file path.
 func (p Pages) Sort() {
+	// Remove in Hugo 0.51
+	helpers.Deprecated("Pages", "Sort", "Use .ByWeight", false)
+	p.sort()
+}
+
+func (p Pages) sort() {
 	pageBy(defaultPageSort).Sort(p)
 }
 
@@ -114,8 +123,8 @@ func (p Pages) Limit(n int) Pages {
 //
 // This may safely be executed  in parallel.
 func (p Pages) ByWeight() Pages {
-	key := "pageSort.ByWeight"
-	pages, _ := spc.get(key, p, pageBy(defaultPageSort).Sort)
+	const key = "pageSort.ByWeight"
+	pages, _ := spc.get(key, pageBy(defaultPageSort).Sort, p)
 	return pages
 }
 
@@ -126,13 +135,13 @@ func (p Pages) ByWeight() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByTitle() Pages {
 
-	key := "pageSort.ByTitle"
+	const key = "pageSort.ByTitle"
 
 	title := func(p1, p2 *Page) bool {
-		return p1.Title < p2.Title
+		return p1.title < p2.title
 	}
 
-	pages, _ := spc.get(key, p, pageBy(title).Sort)
+	pages, _ := spc.get(key, pageBy(title).Sort, p)
 	return pages
 }
 
@@ -143,13 +152,13 @@ func (p Pages) ByTitle() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByLinkTitle() Pages {
 
-	key := "pageSort.ByLinkTitle"
+	const key = "pageSort.ByLinkTitle"
 
 	linkTitle := func(p1, p2 *Page) bool {
 		return p1.linkTitle < p2.linkTitle
 	}
 
-	pages, _ := spc.get(key, p, pageBy(linkTitle).Sort)
+	pages, _ := spc.get(key, pageBy(linkTitle).Sort, p)
 
 	return pages
 }
@@ -161,13 +170,13 @@ func (p Pages) ByLinkTitle() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByDate() Pages {
 
-	key := "pageSort.ByDate"
+	const key = "pageSort.ByDate"
 
 	date := func(p1, p2 *Page) bool {
 		return p1.Date.Unix() < p2.Date.Unix()
 	}
 
-	pages, _ := spc.get(key, p, pageBy(date).Sort)
+	pages, _ := spc.get(key, pageBy(date).Sort, p)
 
 	return pages
 }
@@ -179,13 +188,13 @@ func (p Pages) ByDate() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByPublishDate() Pages {
 
-	key := "pageSort.ByPublishDate"
+	const key = "pageSort.ByPublishDate"
 
 	pubDate := func(p1, p2 *Page) bool {
 		return p1.PublishDate.Unix() < p2.PublishDate.Unix()
 	}
 
-	pages, _ := spc.get(key, p, pageBy(pubDate).Sort)
+	pages, _ := spc.get(key, pageBy(pubDate).Sort, p)
 
 	return pages
 }
@@ -197,13 +206,13 @@ func (p Pages) ByPublishDate() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByExpiryDate() Pages {
 
-	key := "pageSort.ByExpiryDate"
+	const key = "pageSort.ByExpiryDate"
 
 	expDate := func(p1, p2 *Page) bool {
 		return p1.ExpiryDate.Unix() < p2.ExpiryDate.Unix()
 	}
 
-	pages, _ := spc.get(key, p, pageBy(expDate).Sort)
+	pages, _ := spc.get(key, pageBy(expDate).Sort, p)
 
 	return pages
 }
@@ -215,13 +224,13 @@ func (p Pages) ByExpiryDate() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByLastmod() Pages {
 
-	key := "pageSort.ByLastmod"
+	const key = "pageSort.ByLastmod"
 
 	date := func(p1, p2 *Page) bool {
 		return p1.Lastmod.Unix() < p2.Lastmod.Unix()
 	}
 
-	pages, _ := spc.get(key, p, pageBy(date).Sort)
+	pages, _ := spc.get(key, pageBy(date).Sort, p)
 
 	return pages
 }
@@ -233,13 +242,13 @@ func (p Pages) ByLastmod() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByLength() Pages {
 
-	key := "pageSort.ByLength"
+	const key = "pageSort.ByLength"
 
 	length := func(p1, p2 *Page) bool {
-		return len(p1.Content) < len(p2.Content)
+		return len(p1.content()) < len(p2.content())
 	}
 
-	pages, _ := spc.get(key, p, pageBy(length).Sort)
+	pages, _ := spc.get(key, pageBy(length).Sort, p)
 
 	return pages
 }
@@ -251,9 +260,9 @@ func (p Pages) ByLength() Pages {
 // This may safely be executed  in parallel.
 func (p Pages) ByLanguage() Pages {
 
-	key := "pageSort.ByLanguage"
+	const key = "pageSort.ByLanguage"
 
-	pages, _ := spc.get(key, p, pageBy(languagePageSort).Sort)
+	pages, _ := spc.get(key, pageBy(languagePageSort).Sort, p)
 
 	return pages
 }
@@ -264,7 +273,7 @@ func (p Pages) ByLanguage() Pages {
 //
 // This may safely be executed  in parallel.
 func (p Pages) Reverse() Pages {
-	key := "pageSort.Reverse"
+	const key = "pageSort.Reverse"
 
 	reverseFunc := func(pages Pages) {
 		for i, j := 0, len(pages)-1; i < j; i, j = i+1, j-1 {
@@ -272,10 +281,16 @@ func (p Pages) Reverse() Pages {
 		}
 	}
 
-	pages, _ := spc.get(key, p, reverseFunc)
+	pages, _ := spc.get(key, reverseFunc, p)
 
 	return pages
 }
+
+// ByParam sorts the pages according to the given page Params key.
+//
+// Adjacent invocations on the same receiver with the same paramsKey will return a cached result.
+//
+// This may safely be executed  in parallel.
 
 func (p Pages) ByParam(paramsKey interface{}) Pages {
 	paramsKeyStr := cast.ToString(paramsKey)
@@ -297,7 +312,7 @@ func (p Pages) ByParam(paramsKey interface{}) Pages {
 		return s1 < s2
 	}
 
-	pages, _ := spc.get(key, p, pageBy(paramsKeyComparator).Sort)
+	pages, _ := spc.get(key, pageBy(paramsKeyComparator).Sort, p)
 
 	return pages
 }

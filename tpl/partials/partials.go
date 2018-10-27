@@ -20,10 +20,12 @@ import (
 	"sync"
 	texttemplate "text/template"
 
-	bp "github.com/spf13/hugo/bufferpool"
-	"github.com/spf13/hugo/deps"
+	bp "github.com/gohugoio/hugo/bufferpool"
+	"github.com/gohugoio/hugo/deps"
 )
 
+// TestTemplateProvider is global deps.ResourceProvider.
+// NOTE: It's currently unused.
 var TestTemplateProvider deps.ResourceProvider
 
 // partialCache represents a cache of partials protected by a mutex.
@@ -32,18 +34,30 @@ type partialCache struct {
 	p map[string]interface{}
 }
 
+func (p *partialCache) clear() {
+	p.Lock()
+	defer p.Unlock()
+	p.p = make(map[string]interface{})
+}
+
 // New returns a new instance of the templates-namespaced template functions.
 func New(deps *deps.Deps) *Namespace {
+	cache := &partialCache{p: make(map[string]interface{})}
+	deps.BuildStartListeners.Add(
+		func() {
+			cache.clear()
+		})
+
 	return &Namespace{
 		deps:           deps,
-		cachedPartials: partialCache{p: make(map[string]interface{})},
+		cachedPartials: cache,
 	}
 }
 
 // Namespace provides template functions for the "templates" namespace.
 type Namespace struct {
 	deps           *deps.Deps
-	cachedPartials partialCache
+	cachedPartials *partialCache
 }
 
 // Include executes the named partial and returns either a string,
@@ -60,37 +74,45 @@ func (ns *Namespace) Include(name string, contextList ...interface{}) (interface
 		context = contextList[0]
 	}
 
-	for _, n := range []string{"partials/" + name, "theme/partials/" + name} {
-		templ := ns.deps.Tmpl.Lookup(n)
-		if templ == nil {
-			// For legacy reasons.
-			templ = ns.deps.Tmpl.Lookup(n + ".html")
+	n := "partials/" + name
+	templ, found := ns.deps.Tmpl.Lookup(n)
+
+	if !found {
+		// For legacy reasons.
+		templ, found = ns.deps.Tmpl.Lookup(n + ".html")
+	}
+	if found {
+		b := bp.GetBuffer()
+		defer bp.PutBuffer(b)
+
+		if err := templ.Execute(b, context); err != nil {
+			return "", err
 		}
-		if templ != nil {
-			b := bp.GetBuffer()
-			defer bp.PutBuffer(b)
 
-			if err := templ.Execute(b, context); err != nil {
-				return "", err
+		if _, ok := templ.(*texttemplate.Template); ok {
+			s := b.String()
+			if ns.deps.Metrics != nil {
+				ns.deps.Metrics.TrackValue(n, s)
 			}
-
-			if _, ok := templ.Template.(*texttemplate.Template); ok {
-				return b.String(), nil
-			}
-
-			return template.HTML(b.String()), nil
-
+			return s, nil
 		}
+
+		s := b.String()
+		if ns.deps.Metrics != nil {
+			ns.deps.Metrics.TrackValue(n, s)
+		}
+		return template.HTML(s), nil
+
 	}
 
 	return "", fmt.Errorf("Partial %q not found", name)
 }
 
-// getCached executes and caches partial templates.  An optional variant
+// IncludeCached executes and caches partial templates.  An optional variant
 // string parameter (a string slice actually, but be only use a variadic
 // argument to make it optional) can be passed so that a given partial can have
 // multiple uses. The cache is created with name+variant as the key.
-func (ns *Namespace) getCached(name string, context interface{}, variant ...string) (interface{}, error) {
+func (ns *Namespace) IncludeCached(name string, context interface{}, variant ...string) (interface{}, error) {
 	key := name
 	if len(variant) > 0 {
 		for i := 0; i < len(variant); i++ {
@@ -100,27 +122,28 @@ func (ns *Namespace) getCached(name string, context interface{}, variant ...stri
 	return ns.getOrCreate(key, name, context)
 }
 
-func (ns *Namespace) getOrCreate(key, name string, context interface{}) (p interface{}, err error) {
-	var ok bool
+func (ns *Namespace) getOrCreate(key, name string, context interface{}) (interface{}, error) {
 
 	ns.cachedPartials.RLock()
-	p, ok = ns.cachedPartials.p[key]
+	p, ok := ns.cachedPartials.p[key]
 	ns.cachedPartials.RUnlock()
 
 	if ok {
-		return
+		return p, nil
+	}
+
+	p, err := ns.Include(name, context)
+	if err != nil {
+		return nil, err
 	}
 
 	ns.cachedPartials.Lock()
-	if p, ok = ns.cachedPartials.p[key]; !ok {
-		ns.cachedPartials.Unlock()
-		p, err = ns.Include(name, context)
-
-		ns.cachedPartials.Lock()
-		ns.cachedPartials.p[key] = p
-
+	defer ns.cachedPartials.Unlock()
+	// Double-check.
+	if p2, ok := ns.cachedPartials.p[key]; ok {
+		return p2, nil
 	}
-	ns.cachedPartials.Unlock()
+	ns.cachedPartials.p[key] = p
 
-	return
+	return p, nil
 }

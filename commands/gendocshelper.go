@@ -19,22 +19,26 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gohugoio/hugo/docshelper"
 	"github.com/spf13/cobra"
-	"github.com/spf13/hugo/docshelper"
+)
+
+var (
+	_ cmder = (*genDocsHelper)(nil)
 )
 
 type genDocsHelper struct {
 	target string
-	cmd    *cobra.Command
+	*baseCmd
 }
 
 func createGenDocsHelper() *genDocsHelper {
 	g := &genDocsHelper{
-		cmd: &cobra.Command{
+		baseCmd: newBaseCmd(&cobra.Command{
 			Use:    "docshelper",
 			Short:  "Generate some data files for the Hugo docs.",
 			Hidden: true,
-		},
+		}),
 	}
 
 	g.cmd.RunE = func(cmd *cobra.Command, args []string) error {

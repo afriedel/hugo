@@ -16,8 +16,9 @@ package fmt
 import (
 	"testing"
 
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/common/loggers"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +27,7 @@ func TestInit(t *testing.T) {
 	var ns *internal.TemplateFuncsNamespace
 
 	for _, nsf := range internal.TemplateFuncsNamespaceRegistry {
-		ns = nsf(&deps.Deps{})
+		ns = nsf(&deps.Deps{Log: loggers.NewErrorLogger()})
 		if ns.Name == name {
 			found = true
 			break

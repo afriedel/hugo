@@ -20,7 +20,7 @@ import (
 )
 
 var pageYamlWithTaxonomiesA = `---
-tags: ['a', 'B', 'c']
+tags: ['a', 'B', 'c', 'x/y']
 categories: 'd'
 ---
 YAML frontmatter with tags and categories taxonomy.`
@@ -30,6 +30,7 @@ tags:
  - "a"
  - "B"
  - "c"
+ - "x/y"
 categories: 'd'
 ---
 YAML frontmatter with tags and categories taxonomy.`
@@ -45,13 +46,14 @@ var pageJSONWithTaxonomies = `{
   "tags": [
     "a",
     "b",
-    "c"
+    "c",
+    "x/y"
   ]
 }
 JSON Front Matter with tags and categories`
 
 var pageTomlWithTaxonomies = `+++
-tags = [ "a", "B", "c" ]
+tags = [ "a", "B", "c", "x/y" ]
 categories = "d"
 +++
 TOML Front Matter with tags and categories`
@@ -72,10 +74,10 @@ func TestParseTaxonomies(t *testing.T) {
 			t.Fatalf("Failed parsing %q: %s", test, err)
 		}
 
-		param := p.GetParam("tags")
+		param := p.getParamToLower("tags")
 
 		if params, ok := param.([]string); ok {
-			expected := []string{"a", "b", "c"}
+			expected := []string{"a", "b", "c", "x/y"}
 			if !reflect.DeepEqual(params, expected) {
 				t.Errorf("Expected %s: got: %s", expected, params)
 			}
@@ -86,7 +88,7 @@ func TestParseTaxonomies(t *testing.T) {
 			}
 		}
 
-		param = p.GetParam("categories")
+		param = p.getParamToLower("categories")
 		singleparam := param.(string)
 
 		if singleparam != "d" {

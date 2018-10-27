@@ -18,21 +18,20 @@ import (
 
 	"os"
 
-	"github.com/spf13/hugo/commands"
-	jww "github.com/spf13/jwalterweatherman"
+	"github.com/gohugoio/hugo/commands"
 )
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
-	commands.Execute()
 
-	if jww.LogCountForLevelsGreaterThanorEqualTo(jww.LevelError) > 0 {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	resp := commands.Execute(os.Args[1:])
+
+	if resp.Err != nil {
+		if resp.IsUserError() {
+			resp.Cmd.Println("")
+			resp.Cmd.Println(resp.Cmd.UsageString())
+		}
 		os.Exit(-1)
 	}
 
-	if commands.Hugo != nil {
-		if commands.Hugo.Log.LogCountForLevelsGreaterThanorEqualTo(jww.LevelError) > 0 {
-			os.Exit(-1)
-		}
-	}
 }

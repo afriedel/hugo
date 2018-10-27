@@ -1,8 +1,12 @@
 language: go
-sudo: required
+sudo: false
+dist: trusty
+env:
+  HUGO_BUILD_TAGS="extended"
+git:
+  depth: false
 go:
-  - 1.7.5
-  - 1.8.1
+  - 1.11
   - tip
 os:
   - linux
@@ -12,12 +16,18 @@ matrix:
     - go: tip
   fast_finish: true
 install:
-  - make vendor
+  - mkdir -p $HOME/src
+  - mv $HOME/gopath/src/github.com/gohugoio/hugo $HOME/src
+  - export TRAVIS_BUILD_DIR=$HOME/src/hugo
+  - cd $HOME/src/hugo
+  - go get github.com/magefile/mage
 script:
-  - make hugo-race check
-  - ./hugo -s docs/
-  - ./hugo --renderToMemory -s docs/
+- go mod download
+- mage -v test
+- mage -v check
+- mage -v hugo
+- ./hugo -s docs/
+- ./hugo --renderToMemory -s docs/
 before_install:
-  # gem install must be run with sudo on OSX
-  - sudo gem install asciidoctor | gem install asciidoctor
-  - sudo pip install docutils
+  - gem install asciidoctor
+  - type asciidoctor

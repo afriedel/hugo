@@ -14,16 +14,17 @@
 package cast
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/docshelper"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/docshelper"
+	"github.com/gohugoio/hugo/tpl/internal"
+	"github.com/spf13/viper"
 )
 
 // This file provides documentation support and is randomly put into this package.
 func init() {
 	docsProvider := func() map[string]interface{} {
 		docs := make(map[string]interface{})
-		d := &deps.Deps{}
+		d := &deps.Deps{Cfg: viper.New()}
 
 		var namespaces internal.TemplateFuncsNamespaces
 

@@ -21,7 +21,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/spf13/hugo/config"
+	"github.com/gohugoio/hugo/config"
 
 	"github.com/spf13/cast"
 )
@@ -270,7 +270,7 @@ func (p *Page) Paginator(options ...interface{}) (*Pager, error) {
 // If it's not, one will be created with all pages in Data["Pages"].
 func (p *PageOutput) Paginator(options ...interface{}) (*Pager, error) {
 	if !p.IsNode() {
-		return nil, fmt.Errorf("Paginators not supported for pages of type %q (%q)", p.Kind, p.Title)
+		return nil, fmt.Errorf("Paginators not supported for pages of type %q (%q)", p.Kind, p.title)
 	}
 	pagerSize, err := resolvePagerSize(p.s.Cfg, options...)
 
@@ -285,7 +285,11 @@ func (p *PageOutput) Paginator(options ...interface{}) (*Pager, error) {
 			return
 		}
 
-		pagers, err := paginatePages(p.targetPathDescriptor, p.Data["Pages"], pagerSize)
+		pathDescriptor := p.targetPathDescriptor
+		if p.s.owner.IsMultihost() {
+			pathDescriptor.LangPrefix = ""
+		}
+		pagers, err := paginatePages(pathDescriptor, p.data["Pages"], pagerSize)
 
 		if err != nil {
 			initError = err
@@ -296,7 +300,6 @@ func (p *PageOutput) Paginator(options ...interface{}) (*Pager, error) {
 			p.paginator = pagers[0]
 			p.paginator.source = "paginator"
 			p.paginator.options = options
-			p.Site.addToPaginationPageCount(uint64(p.paginator.TotalPages()))
 		}
 
 	})
@@ -318,7 +321,7 @@ func (p *Page) Paginate(seq interface{}, options ...interface{}) (*Pager, error)
 // Note that repeated calls will return the same result, even if the sequence is different.
 func (p *PageOutput) Paginate(seq interface{}, options ...interface{}) (*Pager, error) {
 	if !p.IsNode() {
-		return nil, fmt.Errorf("Paginators not supported for pages of type %q (%q)", p.Kind, p.Title)
+		return nil, fmt.Errorf("Paginators not supported for pages of type %q (%q)", p.Kind, p.title)
 	}
 
 	pagerSize, err := resolvePagerSize(p.s.Cfg, options...)
@@ -333,7 +336,12 @@ func (p *PageOutput) Paginate(seq interface{}, options ...interface{}) (*Pager, 
 		if p.paginator != nil {
 			return
 		}
-		pagers, err := paginatePages(p.targetPathDescriptor, seq, pagerSize)
+
+		pathDescriptor := p.targetPathDescriptor
+		if p.s.owner.IsMultihost() {
+			pathDescriptor.LangPrefix = ""
+		}
+		pagers, err := paginatePages(pathDescriptor, seq, pagerSize)
 
 		if err != nil {
 			initError = err
@@ -344,7 +352,6 @@ func (p *PageOutput) Paginate(seq interface{}, options ...interface{}) (*Pager, 
 			p.paginator = pagers[0]
 			p.paginator.source = seq
 			p.paginator.options = options
-			p.Site.addToPaginationPageCount(uint64(p.paginator.TotalPages()))
 		}
 
 	})
@@ -392,7 +399,11 @@ func paginatePages(td targetPathDescriptor, seq interface{}, pagerSize int) (pag
 
 	var paginator *paginator
 
-	if groups, ok := seq.(PagesGroup); ok {
+	groups, err := toPagesGroup(seq)
+	if err != nil {
+		return nil, err
+	}
+	if groups != nil {
 		paginator, _ = newPaginatorFromPageGroups(groups, pagerSize, urlFactory)
 	} else {
 		pages, err := toPages(seq)
@@ -407,19 +418,69 @@ func paginatePages(td targetPathDescriptor, seq interface{}, pagerSize int) (pag
 	return pagers, nil
 }
 
-func toPages(seq interface{}) (Pages, error) {
-	switch seq.(type) {
-	case Pages:
-		return seq.(Pages), nil
-	case *Pages:
-		return *(seq.(*Pages)), nil
-	case WeightedPages:
-		return (seq.(WeightedPages)).Pages(), nil
-	case PageGroup:
-		return (seq.(PageGroup)).Pages, nil
-	default:
-		return nil, fmt.Errorf("unsupported type in paginate, got %T", seq)
+func toPagesGroup(seq interface{}) (PagesGroup, error) {
+	switch v := seq.(type) {
+	case nil:
+		return nil, nil
+	case PagesGroup:
+		return v, nil
+	case []PageGroup:
+		return PagesGroup(v), nil
+	case []interface{}:
+		l := len(v)
+		if l == 0 {
+			break
+		}
+		switch v[0].(type) {
+		case PageGroup:
+			pagesGroup := make(PagesGroup, l)
+			for i, ipg := range v {
+				if pg, ok := ipg.(PageGroup); ok {
+					pagesGroup[i] = pg
+				} else {
+					return nil, fmt.Errorf("unsupported type in paginate from slice, got %T instead of PageGroup", ipg)
+				}
+			}
+			return PagesGroup(pagesGroup), nil
+		}
 	}
+
+	return nil, nil
+}
+
+func toPages(seq interface{}) (Pages, error) {
+	if seq == nil {
+		return Pages{}, nil
+	}
+
+	switch v := seq.(type) {
+	case Pages:
+		return v, nil
+	case *Pages:
+		return *(v), nil
+	case []*Page:
+		return Pages(v), nil
+	case WeightedPages:
+		return v.Pages(), nil
+	case PageGroup:
+		return v.Pages, nil
+	case []interface{}:
+		pages := make(Pages, len(v))
+		success := true
+		for i, vv := range v {
+			p, ok := vv.(*Page)
+			if !ok {
+				success = false
+				break
+			}
+			pages[i] = p
+		}
+		if success {
+			return pages, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cannot convert type %T to Pages", seq)
 }
 
 // probablyEqual checks page lists for probable equality.
@@ -521,14 +582,13 @@ func newPaginationURLFactory(d targetPathDescriptor) paginationURLFactory {
 		pathDescriptor := d
 		var rel string
 		if page > 1 {
-			rel = fmt.Sprintf("/%s/%d/", d.PathSpec.PaginatePath(), page)
+			rel = fmt.Sprintf("/%s/%d/", d.PathSpec.PaginatePath, page)
 			pathDescriptor.Addends = rel
 		}
 
 		targetPath := createTargetPath(pathDescriptor)
 		targetPath = strings.TrimSuffix(targetPath, d.Type.BaseFilename())
 		link := d.PathSpec.PrependBasePath(targetPath)
-
 		// Note: The targetPath is massaged with MakePathSanitized
 		return d.PathSpec.URLizeFilename(link)
 	}

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/output"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/output"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,58 +206,55 @@ func TestPaginationURLFactory(t *testing.T) {
 	cfg.Set("paginatePath", "zoo")
 
 	for _, uglyURLs := range []bool{false, true} {
-		t.Run(fmt.Sprintf("uglyURLs=%t", uglyURLs), func(t *testing.T) {
-			for _, canonifyURLs := range []bool{false, true} {
-				t.Run(fmt.Sprintf("canonifyURLs=%t", canonifyURLs), func(t *testing.T) {
+		for _, canonifyURLs := range []bool{false, true} {
+			t.Run(fmt.Sprintf("uglyURLs=%t,canonifyURLs=%t", uglyURLs, canonifyURLs), func(t *testing.T) {
 
-					tests := []struct {
-						name     string
-						d        targetPathDescriptor
-						baseURL  string
-						page     int
-						expected string
-					}{
-						{"HTML home page 32",
-							targetPathDescriptor{Kind: KindHome, Type: output.HTMLFormat}, "http://example.com/", 32, "/zoo/32/"},
-						{"JSON home page 42",
-							targetPathDescriptor{Kind: KindHome, Type: output.JSONFormat}, "http://example.com/", 42, "/zoo/42/"},
-						// Issue #1252
-						{"BaseURL with sub path",
-							targetPathDescriptor{Kind: KindHome, Type: output.HTMLFormat}, "http://example.com/sub/", 999, "/sub/zoo/999/"},
+				tests := []struct {
+					name     string
+					d        targetPathDescriptor
+					baseURL  string
+					page     int
+					expected string
+				}{
+					{"HTML home page 32",
+						targetPathDescriptor{Kind: KindHome, Type: output.HTMLFormat}, "http://example.com/", 32, "/zoo/32/"},
+					{"JSON home page 42",
+						targetPathDescriptor{Kind: KindHome, Type: output.JSONFormat}, "http://example.com/", 42, "/zoo/42/"},
+					// Issue #1252
+					{"BaseURL with sub path",
+						targetPathDescriptor{Kind: KindHome, Type: output.HTMLFormat}, "http://example.com/sub/", 999, "/sub/zoo/999/"},
+				}
+
+				for _, test := range tests {
+					d := test.d
+					cfg.Set("baseURL", test.baseURL)
+					cfg.Set("canonifyURLs", canonifyURLs)
+					cfg.Set("uglyURLs", uglyURLs)
+					d.UglyURLs = uglyURLs
+
+					expected := test.expected
+
+					if canonifyURLs {
+						expected = strings.Replace(expected, "/sub", "", 1)
 					}
 
-					for _, test := range tests {
-						d := test.d
-						cfg.Set("baseURL", test.baseURL)
-						cfg.Set("canonifyURLs", canonifyURLs)
-						cfg.Set("uglyURLs", uglyURLs)
-						d.UglyURLs = uglyURLs
-
-						expected := test.expected
-
-						if canonifyURLs {
-							expected = strings.Replace(expected, "/sub", "", 1)
-						}
-
-						if uglyURLs {
-							expected = expected[:len(expected)-1] + "." + test.d.Type.MediaType.Suffix
-						}
-
-						pathSpec := newTestPathSpec(fs, cfg)
-						d.PathSpec = pathSpec
-
-						factory := newPaginationURLFactory(d)
-
-						got := factory(test.page)
-
-						require.Equal(t, expected, got)
-
+					if uglyURLs {
+						expected = expected[:len(expected)-1] + "." + test.d.Type.MediaType.Suffix()
 					}
-				})
-			}
-		})
+
+					pathSpec := newTestPathSpec(fs, cfg)
+					d.PathSpec = pathSpec
+
+					factory := newPaginationURLFactory(d)
+
+					got := factory(test.page)
+
+					require.Equal(t, expected, got)
+
+				}
+			})
+		}
 	}
-
 }
 
 func TestPaginator(t *testing.T) {
@@ -282,9 +279,9 @@ func doTestPaginator(t *testing.T, useViper bool) {
 	require.NoError(t, err)
 
 	pages := createTestPages(s, 12)
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
-	n2, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
-	n1.Data["Pages"] = pages
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
+	n2, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
+	n1.data["Pages"] = pages
 
 	var paginator1 *Pager
 
@@ -304,12 +301,12 @@ func doTestPaginator(t *testing.T, useViper bool) {
 	require.Nil(t, err)
 	require.Equal(t, paginator2, paginator1.Next())
 
-	n1.Data["Pages"] = createTestPages(s, 1)
+	n1.data["Pages"] = createTestPages(s, 1)
 	samePaginator, _ := n1.Paginator()
 	require.Equal(t, paginator1, samePaginator)
 
 	pp, _ := s.NewPage("test")
-	p, _ := newPageOutput(pp, false, output.HTMLFormat)
+	p, _ := newPageOutput(pp, false, false, output.HTMLFormat)
 
 	_, err = p.Paginator()
 	require.NotNil(t, err)
@@ -318,7 +315,7 @@ func doTestPaginator(t *testing.T, useViper bool) {
 func TestPaginatorWithNegativePaginate(t *testing.T) {
 	t.Parallel()
 	s := newTestSite(t, "paginate", -1)
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 	_, err := n1.Paginator()
 	require.Error(t, err)
 }
@@ -381,8 +378,8 @@ func doTestPaginate(t *testing.T, useViper bool) {
 	}
 
 	pages := createTestPages(s, 6)
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
-	n2, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
+	n2, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 
 	var paginator1, paginator2 *Pager
 
@@ -407,7 +404,7 @@ func doTestPaginate(t *testing.T, useViper bool) {
 	require.Equal(t, paginator2, paginator1.Next())
 
 	pp, err := s.NewPage("test")
-	p, _ := newPageOutput(pp, false, output.HTMLFormat)
+	p, _ := newPageOutput(pp, false, false, output.HTMLFormat)
 
 	_, err = p.Paginate(pages)
 	require.NotNil(t, err)
@@ -416,7 +413,7 @@ func doTestPaginate(t *testing.T, useViper bool) {
 func TestInvalidOptions(t *testing.T) {
 	t.Parallel()
 	s := newTestSite(t)
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 
 	_, err := n1.Paginate(createTestPages(s, 1), 1, 2)
 	require.NotNil(t, err)
@@ -434,7 +431,7 @@ func TestPaginateWithNegativePaginate(t *testing.T) {
 	s, err := NewSiteForCfg(deps.DepsCfg{Cfg: cfg, Fs: fs})
 	require.NoError(t, err)
 
-	n, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 
 	_, err = n.Paginate(createTestPages(s, 2))
 	require.NotNil(t, err)
@@ -461,8 +458,8 @@ func TestPaginatePages(t *testing.T) {
 func TestPaginatorFollowedByPaginateShouldFail(t *testing.T) {
 	t.Parallel()
 	s := newTestSite(t, "paginate", 10)
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
-	n2, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
+	n2, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 
 	_, err := n1.Paginator()
 	require.Nil(t, err)
@@ -478,8 +475,8 @@ func TestPaginateFollowedByDifferentPaginateShouldFail(t *testing.T) {
 	t.Parallel()
 	s := newTestSite(t, "paginate", 10)
 
-	n1, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
-	n2, _ := newPageOutput(s.newHomePage(), false, output.HTMLFormat)
+	n1, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
+	n2, _ := newPageOutput(s.newHomePage(), false, false, output.HTMLFormat)
 
 	p1 := createTestPages(s, 2)
 	p2 := createTestPages(s, 10)

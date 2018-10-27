@@ -23,8 +23,11 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
+	// Import webp codec
+	_ "golang.org/x/image/webp"
+
+	"github.com/gohugoio/hugo/deps"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/deps"
 )
 
 // New returns a new instance of the images-namespaced template functions.
@@ -68,6 +71,7 @@ func (ns *Namespace) Config(path interface{}) (image.Config, error) {
 	if err != nil {
 		return image.Config{}, err
 	}
+	defer f.Close()
 
 	config, _, err = image.DecodeConfig(f)
 	if err != nil {

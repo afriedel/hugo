@@ -18,11 +18,11 @@ import (
 
 	"fmt"
 
+	"github.com/gohugoio/hugo/deps"
 	"github.com/spf13/afero"
-	"github.com/spf13/hugo/deps"
 
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +90,7 @@ categories:
 	siteConfig := fmt.Sprintf(siteConfigTemplate, disabledStr)
 	writeToFs(t, mf, "config.toml", siteConfig)
 
-	cfg, err := LoadConfig(mf, "", "config.toml")
+	cfg, err := LoadConfigDefault(mf)
 	require.NoError(t, err)
 
 	fs := hugofs.NewFrom(mf, cfg)
@@ -104,8 +104,8 @@ categories:
 
 	writeSource(t, fs, "content/sect/p1.md", fmt.Sprintf(pageTemplate, "P1", "- tag1"))
 
-	writeNewContentFile(t, fs, "Category Terms", "2017-01-01", "content/categories/_index.md", 10)
-	writeNewContentFile(t, fs, "Tag1 List", "2017-01-01", "content/tags/tag1/_index.md", 10)
+	writeNewContentFile(t, fs.Source, "Category Terms", "2017-01-01", "content/categories/_index.md", 10)
+	writeNewContentFile(t, fs.Source, "Tag1 List", "2017-01-01", "content/tags/tag1/_index.md", 10)
 
 	h, err := NewHugoSites(deps.DepsCfg{Fs: fs, Cfg: cfg})
 

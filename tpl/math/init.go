@@ -14,8 +14,8 @@
 package math
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "math"
@@ -36,10 +36,31 @@ func init() {
 			},
 		)
 
+		ns.AddMethodMapping(ctx.Ceil,
+			nil,
+			[][2]string{
+				{"{{math.Ceil 2.1}}", "3"},
+			},
+		)
+
 		ns.AddMethodMapping(ctx.Div,
 			[]string{"div"},
 			[][2]string{
 				{"{{div 6 3}}", "2"},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Floor,
+			nil,
+			[][2]string{
+				{"{{math.Floor 1.9}}", "1"},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Log,
+			nil,
+			[][2]string{
+				{"{{math.Log 1}}", "0"},
 			},
 		)
 
@@ -61,6 +82,13 @@ func init() {
 			[]string{"mul"},
 			[][2]string{
 				{"{{mul 2 3}}", "6"},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Round,
+			nil,
+			[][2]string{
+				{"{{math.Round 1.5}}", "2"},
 			},
 		)
 

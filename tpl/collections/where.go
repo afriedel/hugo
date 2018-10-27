@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 )
 
 // Where returns a filtered subset of a given data type.
@@ -54,6 +53,7 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 	if !v.IsValid() {
 		vIsNil = true
 	}
+
 	mv, mvIsNil := indirect(mv)
 	if !mv.IsValid() {
 		mvIsNil = true
@@ -116,7 +116,7 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 			return false, nil
 		}
 
-		if v.Kind() != reflect.Interface && mv.Type().Elem().Kind() != reflect.Interface && mv.Type().Elem() != v.Type() {
+		if v.Kind() != reflect.Interface && mv.Type().Elem().Kind() != reflect.Interface && mv.Type().Elem() != v.Type() && v.Kind() != reflect.Array && v.Kind() != reflect.Slice {
 			return false, nil
 		}
 		switch v.Kind() {
@@ -145,6 +145,9 @@ func (ns *Namespace) checkCondition(v, mv reflect.Value, op string) (bool, error
 					ima = append(ima, toTimeUnix(mv.Index(i)))
 				}
 			}
+		case reflect.Array, reflect.Slice:
+			slv = v.Interface()
+			slmv = mv.Interface()
 		}
 	}
 
@@ -381,7 +384,7 @@ func (ns *Namespace) checkWhereMap(seqv, kv, mv reflect.Value, path []string, op
 	return rv.Interface(), nil
 }
 
-// toFloat returns the int value if possible.
+// toFloat returns the float value if possible.
 func toFloat(v reflect.Value) (float64, error) {
 	switch v.Kind() {
 	case reflect.Float32, reflect.Float64:
@@ -393,6 +396,7 @@ func toFloat(v reflect.Value) (float64, error) {
 }
 
 // toInt returns the int value if possible, -1 if not.
+// TODO(bep) consolidate all these reflect funcs.
 func toInt(v reflect.Value) (int64, error) {
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -401,6 +405,16 @@ func toInt(v reflect.Value) (int64, error) {
 		return toInt(v.Elem())
 	}
 	return -1, errors.New("unable to convert value to int")
+}
+
+func toUint(v reflect.Value) (uint64, error) {
+	switch v.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return v.Uint(), nil
+	case reflect.Interface:
+		return toUint(v.Elem())
+	}
+	return 0, errors.New("unable to convert value to uint")
 }
 
 // toString returns the string value if possible, "" if not.
@@ -413,12 +427,6 @@ func toString(v reflect.Value) (string, error) {
 	}
 	return "", errors.New("unable to convert value to string")
 }
-
-var (
-	zero      reflect.Value
-	errorType = reflect.TypeOf((*error)(nil)).Elem()
-	timeType  = reflect.TypeOf((*time.Time)(nil)).Elem()
-)
 
 func toTimeUnix(v reflect.Value) int64 {
 	if v.Kind() == reflect.Interface {

@@ -18,12 +18,14 @@ import (
 	"html/template"
 	"testing"
 
-	"github.com/spf13/hugo/deps"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/spf13/cast"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var ns = New(&deps.Deps{})
+var ns = New(&deps.Deps{Cfg: viper.New()})
 
 type tstNoStringer struct{}
 
@@ -34,12 +36,12 @@ func TestChomp(t *testing.T) {
 		s      interface{}
 		expect interface{}
 	}{
-		{"\n a\n", template.HTML("\n a")},
-		{"\n a\n\n", template.HTML("\n a")},
-		{"\n a\r\n", template.HTML("\n a")},
-		{"\n a\n\r\n", template.HTML("\n a")},
-		{"\n a\r\r", template.HTML("\n a")},
-		{"\n a\r", template.HTML("\n a")},
+		{"\n a\n", "\n a"},
+		{"\n a\n\n", "\n a"},
+		{"\n a\r\n", "\n a"},
+		{"\n a\n\r\n", "\n a"},
+		{"\n a\r\r", "\n a"},
+		{"\n a\r", "\n a"},
 		// errors
 		{tstNoStringer{}, false},
 	} {
@@ -54,6 +56,11 @@ func TestChomp(t *testing.T) {
 
 		require.NoError(t, err, errMsg)
 		assert.Equal(t, test.expect, result, errMsg)
+
+		// repeat the check with template.HTML input
+		result, err = ns.Chomp(template.HTML(cast.ToString(test.s)))
+		require.NoError(t, err, errMsg)
+		assert.Equal(t, template.HTML(cast.ToString(test.expect)), result, errMsg)
 	}
 }
 
@@ -155,6 +162,33 @@ func TestCountRunes(t *testing.T) {
 		errMsg := fmt.Sprintf("[%d] %v", i, test.s)
 
 		result, err := ns.CountRunes(test.s)
+
+		if b, ok := test.expect.(bool); ok && !b {
+			require.Error(t, err, errMsg)
+			continue
+		}
+
+		require.NoError(t, err, errMsg)
+		assert.Equal(t, test.expect, result, errMsg)
+	}
+}
+
+func TestRuneCount(t *testing.T) {
+	t.Parallel()
+
+	for i, test := range []struct {
+		s      interface{}
+		expect interface{}
+	}{
+		{"foo bar", 7},
+		{"旁边", 2},
+		{`<div class="test">旁边</div>`, 26},
+		// errors
+		{tstNoStringer{}, false},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test.s)
+
+		result, err := ns.RuneCount(test.s)
 
 		if b, ok := test.expect.(bool); ok && !b {
 			require.Error(t, err, errMsg)
@@ -573,6 +607,41 @@ func TestTrim(t *testing.T) {
 	}
 }
 
+func TestTrimLeft(t *testing.T) {
+	t.Parallel()
+
+	for i, test := range []struct {
+		s      interface{}
+		cutset interface{}
+		expect interface{}
+	}{
+		{"abba", "a", "bba"},
+		{"abba", "ab", ""},
+		{"<tag>", "<>", "tag>"},
+		{`"quote"`, `"`, `quote"`},
+		{1221, "1", "221"},
+		{1221, "12", ""},
+		{"007", "0", "7"},
+		{template.HTML("<tag>"), "<>", "tag>"},
+		{[]byte("<tag>"), "<>", "tag>"},
+		// errors
+		{"", tstNoStringer{}, false},
+		{tstNoStringer{}, "", false},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		result, err := ns.TrimLeft(test.cutset, test.s)
+
+		if b, ok := test.expect.(bool); ok && !b {
+			require.Error(t, err, errMsg)
+			continue
+		}
+
+		require.NoError(t, err, errMsg)
+		assert.Equal(t, test.expect, result, errMsg)
+	}
+}
+
 func TestTrimPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -591,7 +660,42 @@ func TestTrimPrefix(t *testing.T) {
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
-		result, err := ns.TrimPrefix(test.s, test.prefix)
+		result, err := ns.TrimPrefix(test.prefix, test.s)
+
+		if b, ok := test.expect.(bool); ok && !b {
+			require.Error(t, err, errMsg)
+			continue
+		}
+
+		require.NoError(t, err, errMsg)
+		assert.Equal(t, test.expect, result, errMsg)
+	}
+}
+
+func TestTrimRight(t *testing.T) {
+	t.Parallel()
+
+	for i, test := range []struct {
+		s      interface{}
+		cutset interface{}
+		expect interface{}
+	}{
+		{"abba", "a", "abb"},
+		{"abba", "ab", ""},
+		{"<tag>", "<>", "<tag"},
+		{`"quote"`, `"`, `"quote`},
+		{1221, "1", "122"},
+		{1221, "12", ""},
+		{"007", "0", "007"},
+		{template.HTML("<tag>"), "<>", "<tag"},
+		{[]byte("<tag>"), "<>", "<tag"},
+		// errors
+		{"", tstNoStringer{}, false},
+		{tstNoStringer{}, "", false},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		result, err := ns.TrimRight(test.cutset, test.s)
 
 		if b, ok := test.expect.(bool); ok && !b {
 			require.Error(t, err, errMsg)
@@ -621,7 +725,42 @@ func TestTrimSuffix(t *testing.T) {
 	} {
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
-		result, err := ns.TrimSuffix(test.s, test.suffix)
+		result, err := ns.TrimSuffix(test.suffix, test.s)
+
+		if b, ok := test.expect.(bool); ok && !b {
+			require.Error(t, err, errMsg)
+			continue
+		}
+
+		require.NoError(t, err, errMsg)
+		assert.Equal(t, test.expect, result, errMsg)
+	}
+}
+
+func TestRepeat(t *testing.T) {
+	t.Parallel()
+
+	for i, test := range []struct {
+		s      interface{}
+		n      interface{}
+		expect interface{}
+	}{
+		{"yo", "2", "yoyo"},
+		{"~", "16", "~~~~~~~~~~~~~~~~"},
+		{"<tag>", "0", ""},
+		{"yay", "1", "yay"},
+		{1221, "1", "1221"},
+		{1221, 2, "12211221"},
+		{template.HTML("<tag>"), "2", "<tag><tag>"},
+		{[]byte("<tag>"), 2, "<tag><tag>"},
+		// errors
+		{"", tstNoStringer{}, false},
+		{tstNoStringer{}, "", false},
+		{"ab", -1, false},
+	} {
+		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		result, err := ns.Repeat(test.n, test.s)
 
 		if b, ok := test.expect.(bool); ok && !b {
 			require.Error(t, err, errMsg)

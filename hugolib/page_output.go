@@ -16,13 +16,19 @@ package hugolib
 import (
 	"fmt"
 	"html/template"
+	"os"
 	"strings"
 	"sync"
 
-	"github.com/spf13/hugo/media"
+	bp "github.com/gohugoio/hugo/bufferpool"
 
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/output"
+	"github.com/gohugoio/hugo/tpl"
+
+	"github.com/gohugoio/hugo/resource"
+
+	"github.com/gohugoio/hugo/media"
+
+	"github.com/gohugoio/hugo/output"
 )
 
 // PageOutput represents one of potentially many output formats of a given
@@ -34,6 +40,10 @@ type PageOutput struct {
 	paginator     *Pager
 	paginatorInit sync.Once
 
+	// Page output specific resources
+	resources     resource.Resources
+	resourcesInit sync.Once
+
 	// Keep this to create URL/path variations, i.e. paginators.
 	targetPathDescriptor targetPathDescriptor
 
@@ -41,26 +51,23 @@ type PageOutput struct {
 }
 
 func (p *PageOutput) targetPath(addends ...string) (string, error) {
-	tp, err := p.createTargetPath(p.outputFormat, addends...)
+	tp, err := p.createTargetPath(p.outputFormat, false, addends...)
 	if err != nil {
 		return "", err
 	}
 	return tp, nil
 }
 
-func newPageOutput(p *Page, createCopy bool, f output.Format) (*PageOutput, error) {
+func newPageOutput(p *Page, createCopy, initContent bool, f output.Format) (*PageOutput, error) {
 	// TODO(bep) This is only needed for tests and we should get rid of it.
 	if p.targetPathDescriptorPrototype == nil {
-		if err := p.initTargetPathDescriptor(); err != nil {
-			return nil, err
-		}
-		if err := p.initURLs(); err != nil {
+		if err := p.initPaths(); err != nil {
 			return nil, err
 		}
 	}
 
 	if createCopy {
-		p = p.copy()
+		p = p.copy(initContent)
 	}
 
 	td, err := p.createTargetPathDescriptor(f)
@@ -78,8 +85,8 @@ func newPageOutput(p *Page, createCopy bool, f output.Format) (*PageOutput, erro
 
 // copy creates a copy of this PageOutput with the lazy sync.Once vars reset
 // so they will be evaluated again, for word count calculations etc.
-func (p *PageOutput) copyWithFormat(f output.Format) (*PageOutput, error) {
-	c, err := newPageOutput(p.Page, true, f)
+func (p *PageOutput) copyWithFormat(f output.Format, initContent bool) (*PageOutput, error) {
+	c, err := newPageOutput(p.Page, true, initContent, f)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +95,7 @@ func (p *PageOutput) copyWithFormat(f output.Format) (*PageOutput, error) {
 }
 
 func (p *PageOutput) copy() (*PageOutput, error) {
-	return p.copyWithFormat(p.outputFormat)
+	return p.copyWithFormat(p.outputFormat, false)
 }
 
 func (p *PageOutput) layouts(layouts ...string) ([]string, error) {
@@ -96,40 +103,37 @@ func (p *PageOutput) layouts(layouts ...string) ([]string, error) {
 		return []string{p.selfLayout}, nil
 	}
 
-	layoutOverride := ""
+	layoutDescriptor := p.layoutDescriptor
+
 	if len(layouts) > 0 {
-		layoutOverride = layouts[0]
+		layoutDescriptor.Layout = layouts[0]
+		layoutDescriptor.LayoutOverride = true
 	}
 
 	return p.s.layoutHandler.For(
-		p.layoutDescriptor,
-		layoutOverride,
+		layoutDescriptor,
 		p.outputFormat)
 }
 
 func (p *PageOutput) Render(layout ...string) template.HTML {
-	if !p.checkRender() {
-		return ""
-	}
-
 	l, err := p.layouts(layout...)
 	if err != nil {
-		helpers.DistinctErrorLog.Printf("in .Render: Failed to resolve layout %q for page %q", layout, p.pathOrTitle())
+		p.s.DistinctErrorLog.Printf("in .Render: Failed to resolve layout %q for page %q", layout, p.pathOrTitle())
 		return ""
 	}
 
 	for _, layout := range l {
-		templ := p.s.Tmpl.Lookup(layout)
-		if templ == nil {
+		templ, found := p.s.Tmpl.Lookup(layout)
+		if !found {
 			// This is legacy from when we had only one output format and
 			// HTML templates only. Some have references to layouts without suffix.
 			// We default to good old HTML.
-			templ = p.s.Tmpl.Lookup(layout + ".html")
+			templ, found = p.s.Tmpl.Lookup(layout + ".html")
 		}
 		if templ != nil {
-			res, err := templ.ExecuteToString(p)
+			res, err := executeToString(templ, p)
 			if err != nil {
-				helpers.DistinctErrorLog.Printf("in .Render: Failed to execute template %q for page %q", layout, p.pathOrTitle())
+				p.s.DistinctErrorLog.Printf("in .Render: Failed to execute template %q: %s", layout, err)
 				return template.HTML("")
 			}
 			return template.HTML(res)
@@ -140,46 +144,27 @@ func (p *PageOutput) Render(layout ...string) template.HTML {
 
 }
 
-func (p *Page) Render(layout ...string) template.HTML {
-	if !p.checkRender() {
-		return ""
+func executeToString(templ tpl.Template, data interface{}) (string, error) {
+	b := bp.GetBuffer()
+	defer bp.PutBuffer(b)
+	if err := templ.Execute(b, data); err != nil {
+		return "", err
 	}
+	return b.String(), nil
 
-	p.pageOutputInit.Do(func() {
-		if p.mainPageOutput != nil {
-			return
-		}
-		// If Render is called in a range loop, the page output isn't available.
-		// So, create one.
-		outFormat := p.outputFormats[0]
-		pageOutput, err := newPageOutput(p, true, outFormat)
-
-		if err != nil {
-			p.s.Log.ERROR.Printf("Failed to create output page for type %q for page %q: %s", outFormat.Name, p.pathOrTitle(), err)
-			return
-		}
-
-		p.mainPageOutput = pageOutput
-
-	})
-
-	return p.mainPageOutput.Render(layout...)
 }
 
-// We may fix this in the future, but the layout handling in Render isn't built
-// for list pages.
-func (p *Page) checkRender() bool {
-	if p.Kind != KindPage {
-		helpers.DistinctWarnLog.Printf(".Render only available for regular pages, not for of kind %q. You probably meant .Site.RegularPages and not.Site.Pages.", p.Kind)
-		return false
+func (p *Page) Render(layout ...string) template.HTML {
+	if p.mainPageOutput == nil {
+		panic(fmt.Sprintf("programming error: no mainPageOutput for %q", p.Path()))
 	}
-	return true
+	return p.mainPageOutput.Render(layout...)
 }
 
 // OutputFormats holds a list of the relevant output formats for a given resource.
 type OutputFormats []*OutputFormat
 
-// And OutputFormat links to a representation of a resource.
+// OutputFormat links to a representation of a resource.
 type OutputFormat struct {
 	// Rel constains a value that can be used to construct a rel link.
 	// This is value is fetched from the output format definition.
@@ -227,18 +212,80 @@ func newOutputFormat(p *Page, f output.Format) *OutputFormat {
 	return &OutputFormat{Rel: rel, f: f, p: p}
 }
 
-// OutputFormats gives the alternative output formats for this PageOutput.
+// AlternativeOutputFormats gives the alternative output formats for this PageOutput.
 // Note that we use the term "alternative" and not "alternate" here, as it
 // does not necessarily replace the other format, it is an alternative representation.
 func (p *PageOutput) AlternativeOutputFormats() (OutputFormats, error) {
 	var o OutputFormats
 	for _, of := range p.OutputFormats() {
-		if of.f.NotAlternative || of.f == p.outputFormat {
+		if of.f.NotAlternative || of.f.Name == p.outputFormat.Name {
 			continue
 		}
 		o = append(o, of)
 	}
 	return o, nil
+}
+
+// deleteResource removes the resource from this PageOutput and the Page. They will
+// always be of the same length, but may contain different elements.
+func (p *PageOutput) deleteResource(i int) {
+	p.resources = append(p.resources[:i], p.resources[i+1:]...)
+	p.Page.Resources = append(p.Page.Resources[:i], p.Page.Resources[i+1:]...)
+
+}
+
+func (p *PageOutput) Resources() resource.Resources {
+	p.resourcesInit.Do(func() {
+		// If the current out shares the same path as the main page output, we reuse
+		// the resource set. For the "amp" use case, we need to clone them with new
+		// base folder.
+		ff := p.outputFormats[0]
+		if p.outputFormat.Path == ff.Path {
+			p.resources = p.Page.Resources
+			return
+		}
+
+		// Clone it with new base.
+		resources := make(resource.Resources, len(p.Page.Resources))
+
+		for i, r := range p.Page.Resources {
+			if c, ok := r.(resource.Cloner); ok {
+				// Clone the same resource with a new target.
+				resources[i] = c.WithNewBase(p.outputFormat.Path)
+			} else {
+				resources[i] = r
+			}
+		}
+
+		p.resources = resources
+	})
+
+	return p.resources
+}
+
+func (p *PageOutput) renderResources() error {
+
+	for i, r := range p.Resources() {
+		src, ok := r.(resource.Source)
+		if !ok {
+			// Pages gets rendered with the owning page.
+			continue
+		}
+
+		if err := src.Publish(); err != nil {
+			if os.IsNotExist(err) {
+				// The resource has been deleted from the file system.
+				// This should be extremely rare, but can happen on live reload in server
+				// mode when the same resource is member of different page bundles.
+				p.deleteResource(i)
+			} else {
+				p.s.Log.ERROR.Printf("Failed to publish Resource for page %q: %s", p.pathOrTitle(), err)
+			}
+		} else {
+			p.s.PathSpec.ProcessingStats.Incr(&p.s.PathSpec.ProcessingStats.Files)
+		}
+	}
+	return nil
 }
 
 // AlternativeOutputFormats is only available on the top level rendering
@@ -266,7 +313,7 @@ func (o *OutputFormat) Permalink() string {
 	return perm
 }
 
-// Permalink returns the relative permalink to this output format.
+// RelPermalink returns the relative permalink to this output format.
 func (o *OutputFormat) RelPermalink() string {
 	rel := o.p.createRelativePermalinkForOutputFormat(o.f)
 	return o.p.s.PathSpec.PrependBasePath(rel)

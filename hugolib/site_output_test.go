@@ -14,7 +14,6 @@
 package hugolib
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -24,58 +23,10 @@ import (
 
 	"fmt"
 
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/output"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/output"
 	"github.com/spf13/viper"
 )
-
-func TestDefaultOutputFormats(t *testing.T) {
-	t.Parallel()
-	defs, err := createDefaultOutputFormats(output.DefaultFormats, viper.New())
-
-	require.NoError(t, err)
-
-	tests := []struct {
-		name string
-		kind string
-		want output.Formats
-	}{
-		{"RSS not for regular pages", KindPage, output.Formats{output.HTMLFormat}},
-		{"Home Sweet Home", KindHome, output.Formats{output.HTMLFormat, output.RSSFormat}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := defs[tt.kind]; !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("createDefaultOutputFormats(%v) = %v, want %v", tt.kind, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestDefaultOutputFormatsWithOverrides(t *testing.T) {
-	t.Parallel()
-
-	htmlOut := output.HTMLFormat
-	htmlOut.BaseName = "htmlindex"
-	rssOut := output.RSSFormat
-	rssOut.BaseName = "feed"
-
-	defs, err := createDefaultOutputFormats(output.Formats{htmlOut, rssOut}, viper.New())
-
-	homeDefs := defs[KindHome]
-
-	rss, found := homeDefs.GetByName("RSS")
-	require.True(t, found)
-	require.Equal(t, rss.BaseName, "feed")
-
-	html, found := homeDefs.GetByName("HTML")
-	require.True(t, found)
-	require.Equal(t, html.BaseName, "htmlindex")
-
-	require.NoError(t, err)
-
-}
 
 func TestSiteWithPageOutputs(t *testing.T) {
 	for _, outputs := range [][]string{{"html", "json", "calendar"}, {"json"}} {
@@ -96,13 +47,14 @@ baseURL = "http://example.com/blog"
 paginate = 1
 defaultContentLanguage = "en"
 
-disableKinds = ["page", "section", "taxonomy", "taxonomyTerm", "RSS", "sitemap", "robotsTXT", "404"]
+disableKinds = ["section", "taxonomy", "taxonomyTerm", "RSS", "sitemap", "robotsTXT", "404"]
 
 [Taxonomies]
 tag = "tags"
 category = "categories"
 
 defaultContentLanguage = "en"
+
 
 [languages]
 
@@ -125,6 +77,9 @@ outputs: %s
 # Doc
 
 {{< myShort >}}
+
+{{< myOtherShort >}}
+
 `
 
 	mf := afero.NewMemMapFs()
@@ -144,6 +99,7 @@ other = "Olboge"
 		"layouts/partials/GoHugo.html", `Go Hugo Partial`,
 		"layouts/_default/baseof.json", `START JSON:{{block "main" .}}default content{{ end }}:END JSON`,
 		"layouts/_default/baseof.html", `START HTML:{{block "main" .}}default content{{ end }}:END HTML`,
+		"layouts/shortcodes/myOtherShort.html", `OtherShort: {{ "<h1>Hi!</h1>" | safeHTML }}`,
 		"layouts/shortcodes/myShort.html", `ShortHTML`,
 		"layouts/shortcodes/myShort.json", `ShortJSON`,
 
@@ -170,8 +126,10 @@ List HTML|{{.Title }}|
 Partial Hugo 1: {{ partial "GoHugo.html" . }}
 Partial Hugo 2: {{ partial "GoHugo" . -}}
 Content: {{ .Content }}
+Len Pages: {{ .Kind }} {{ len .Site.RegularPages }} Page Number: {{ .Paginator.PageNumber }}
 {{ end }}
 `,
+		"layouts/_default/single.html", `{{ define "main" }}{{ .Content }}{{ end }}`,
 	)
 	require.Len(t, h.Sites, 2)
 
@@ -179,6 +137,11 @@ Content: {{ .Content }}
 
 	writeSource(t, fs, "content/_index.md", fmt.Sprintf(pageTemplate, "JSON Home", outputsStr))
 	writeSource(t, fs, "content/_index.nn.md", fmt.Sprintf(pageTemplate, "JSON Nynorsk Heim", outputsStr))
+
+	for i := 1; i <= 10; i++ {
+		writeSource(t, fs, fmt.Sprintf("content/p%d.md", i), fmt.Sprintf(pageTemplate, fmt.Sprintf("Page %d", i), outputsStr))
+
+	}
 
 	err := h.Build(BuildCfg{})
 
@@ -210,15 +173,21 @@ Content: {{ .Content }}
 			"Output/Rel: HTML/canonical|",
 			"en: Elbow",
 			"ShortJSON",
+			"OtherShort: <h1>Hi!</h1>",
 		)
 
 		th.assertFileContent("public/index.html",
 			// The HTML entity is a deliberate part of this test: The HTML templates are
 			// parsed with html/template.
-			`List HTML|JSON Home|<atom:link href=http://example.com/blog/ rel="self" type="text/html&#43;html" />`,
+			`List HTML|JSON Home|<atom:link href=http://example.com/blog/ rel="self" type="text/html" />`,
 			"en: Elbow",
 			"ShortHTML",
+			"OtherShort: <h1>Hi!</h1>",
+			"Len Pages: home 10",
 		)
+		th.assertFileContent("public/page/2/index.html", "Page Number: 2")
+		th.assertFileNotExist("public/page/2/index.json")
+
 		th.assertFileContent("public/nn/index.html",
 			"List HTML|JSON Nynorsk Heim|",
 			"nn: Olboge")
@@ -226,8 +195,9 @@ Content: {{ .Content }}
 		th.assertFileContent("public/index.json",
 			"Output/Rel: JSON/canonical|",
 			// JSON is plain text, so no need to safeHTML this and that
-			`<atom:link href=http://example.com/blog/index.json rel="self" type="application/json+json" />`,
+			`<atom:link href=http://example.com/blog/index.json rel="self" type="application/json" />`,
 			"ShortJSON",
+			"OtherShort: <h1>Hi!</h1>",
 		)
 		th.assertFileContent("public/nn/index.json",
 			"List JSON|JSON Nynorsk Heim|",
@@ -253,6 +223,9 @@ Content: {{ .Content }}
 		require.Equal(t, "/blog/index.ics", cal.RelPermalink())
 		require.Equal(t, "webcal://example.com/blog/index.ics", cal.Permalink())
 	}
+
+	require.True(t, home.HasShortcode("myShort"))
+	require.False(t, home.HasShortcode("doesNotExist"))
 
 }
 
@@ -289,4 +262,155 @@ baseName = "feed"
 	//Issue #3450
 	require.Equal(t, "http://example.com/blog/feed.xml", s.Info.RSSLink)
 
+}
+
+// Issue #3614
+func TestDotLessOutputFormat(t *testing.T) {
+	siteConfig := `
+baseURL = "http://example.com/blog"
+
+paginate = 1
+defaultContentLanguage = "en"
+
+disableKinds = ["page", "section", "taxonomy", "taxonomyTerm", "sitemap", "robotsTXT", "404"]
+
+[mediaTypes]
+[mediaTypes."text/nodot"]
+delimiter = ""
+[mediaTypes."text/defaultdelim"]
+suffixes = ["defd"]
+[mediaTypes."text/nosuffix"]
+[mediaTypes."text/customdelim"]
+suffixes = ["del"]
+delimiter = "_"
+
+[outputs]
+home = [ "DOTLESS", "DEF", "NOS", "CUS" ]
+
+[outputFormats]
+[outputFormats.DOTLESS]
+mediatype = "text/nodot"
+baseName = "_redirects" # This is how Netlify names their redirect files.
+[outputFormats.DEF]
+mediatype = "text/defaultdelim"
+baseName = "defaultdelimbase"
+[outputFormats.NOS]
+mediatype = "text/nosuffix"
+baseName = "nosuffixbase"
+[outputFormats.CUS]
+mediatype = "text/customdelim"
+baseName = "customdelimbase"
+
+`
+
+	mf := afero.NewMemMapFs()
+	writeToFs(t, mf, "content/foo.html", `foo`)
+	writeToFs(t, mf, "layouts/_default/list.dotless", `a dotless`)
+	writeToFs(t, mf, "layouts/_default/list.def.defd", `default delimim`)
+	writeToFs(t, mf, "layouts/_default/list.nos", `no suffix`)
+	writeToFs(t, mf, "layouts/_default/list.cus.del", `custom delim`)
+
+	th, h := newTestSitesFromConfig(t, mf, siteConfig)
+
+	err := h.Build(BuildCfg{})
+
+	require.NoError(t, err)
+
+	th.assertFileContent("public/_redirects", "a dotless")
+	th.assertFileContent("public/defaultdelimbase.defd", "default delimim")
+	// This looks weird, but the user has chosen this definition.
+	th.assertFileContent("public/nosuffixbase", "no suffix")
+	th.assertFileContent("public/customdelimbase_del", "custom delim")
+
+	s := h.Sites[0]
+	home := s.getPage(KindHome)
+	require.NotNil(t, home)
+
+	outputs := home.OutputFormats()
+
+	require.Equal(t, "/blog/_redirects", outputs.Get("DOTLESS").RelPermalink())
+	require.Equal(t, "/blog/defaultdelimbase.defd", outputs.Get("DEF").RelPermalink())
+	require.Equal(t, "/blog/nosuffixbase", outputs.Get("NOS").RelPermalink())
+	require.Equal(t, "/blog/customdelimbase_del", outputs.Get("CUS").RelPermalink())
+
+}
+
+func TestCreateSiteOutputFormats(t *testing.T) {
+	assert := require.New(t)
+
+	outputsConfig := map[string]interface{}{
+		KindHome:    []string{"HTML", "JSON"},
+		KindSection: []string{"JSON"},
+	}
+
+	cfg := viper.New()
+	cfg.Set("outputs", outputsConfig)
+
+	outputs, err := createSiteOutputFormats(output.DefaultFormats, cfg)
+	assert.NoError(err)
+	assert.Equal(output.Formats{output.JSONFormat}, outputs[KindSection])
+	assert.Equal(output.Formats{output.HTMLFormat, output.JSONFormat}, outputs[KindHome])
+
+	// Defaults
+	assert.Equal(output.Formats{output.HTMLFormat, output.RSSFormat}, outputs[KindTaxonomy])
+	assert.Equal(output.Formats{output.HTMLFormat, output.RSSFormat}, outputs[KindTaxonomyTerm])
+	assert.Equal(output.Formats{output.HTMLFormat}, outputs[KindPage])
+
+	// These aren't (currently) in use when rendering in Hugo,
+	// but the pages needs to be assigned an output format,
+	// so these should also be correct/sensible.
+	assert.Equal(output.Formats{output.RSSFormat}, outputs[kindRSS])
+	assert.Equal(output.Formats{output.SitemapFormat}, outputs[kindSitemap])
+	assert.Equal(output.Formats{output.RobotsTxtFormat}, outputs[kindRobotsTXT])
+	assert.Equal(output.Formats{output.HTMLFormat}, outputs[kind404])
+
+}
+
+func TestCreateSiteOutputFormatsInvalidConfig(t *testing.T) {
+	assert := require.New(t)
+
+	outputsConfig := map[string]interface{}{
+		KindHome: []string{"FOO", "JSON"},
+	}
+
+	cfg := viper.New()
+	cfg.Set("outputs", outputsConfig)
+
+	_, err := createSiteOutputFormats(output.DefaultFormats, cfg)
+	assert.Error(err)
+}
+
+func TestCreateSiteOutputFormatsEmptyConfig(t *testing.T) {
+	assert := require.New(t)
+
+	outputsConfig := map[string]interface{}{
+		KindHome: []string{},
+	}
+
+	cfg := viper.New()
+	cfg.Set("outputs", outputsConfig)
+
+	outputs, err := createSiteOutputFormats(output.DefaultFormats, cfg)
+	assert.NoError(err)
+	assert.Equal(output.Formats{output.HTMLFormat, output.RSSFormat}, outputs[KindHome])
+}
+
+func TestCreateSiteOutputFormatsCustomFormats(t *testing.T) {
+	assert := require.New(t)
+
+	outputsConfig := map[string]interface{}{
+		KindHome: []string{},
+	}
+
+	cfg := viper.New()
+	cfg.Set("outputs", outputsConfig)
+
+	var (
+		customRSS  = output.Format{Name: "RSS", BaseName: "customRSS"}
+		customHTML = output.Format{Name: "HTML", BaseName: "customHTML"}
+	)
+
+	outputs, err := createSiteOutputFormats(output.Formats{customRSS, customHTML}, cfg)
+	assert.NoError(err)
+	assert.Equal(output.Formats{customHTML, customRSS}, outputs[KindHome])
 }

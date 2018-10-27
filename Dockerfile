@@ -1,15 +1,26 @@
-FROM golang:1.8-alpine
+# GitHub:       https://github.com/gohugoio
+# Twitter:      https://twitter.com/gohugoio
+# Website:      https://gohugo.io/
 
-ENV GOPATH /go
-ENV USER root
+FROM golang:1.11-alpine3.7 AS build
 
-RUN apk update && apk add git make
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GO111MODULE=on
 
-# pre-install known dependencies before the source, so we don't redownload them whenever the source changes
-RUN go get github.com/kardianos/govendor \
- && govendor get github.com/spf13/hugo
+WORKDIR /go/src/github.com/gohugoio/hugo
+RUN apk add --no-cache \
+    git \
+    musl-dev
+COPY . /go/src/github.com/gohugoio/hugo/
+RUN go install -ldflags '-s -w'
 
-COPY . $GOPATH/src/github.com/spf13/hugo
+# ---
 
-RUN cd $GOPATH/src/github.com/spf13/hugo \
- 	&& make install test
+FROM scratch
+COPY --from=build /go/bin/hugo /hugo
+WORKDIR /site
+VOLUME  /site
+EXPOSE  1313
+ENTRYPOINT [ "/hugo" ]
+CMD [ "--help" ]

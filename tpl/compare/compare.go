@@ -18,6 +18,8 @@ import (
 	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/gohugoio/hugo/compare"
 )
 
 // New returns a new instance of the compare-namespaced template functions.
@@ -85,6 +87,15 @@ func (*Namespace) Default(dflt interface{}, given ...interface{}) (interface{}, 
 
 // Eq returns the boolean truth of arg1 == arg2.
 func (*Namespace) Eq(x, y interface{}) bool {
+
+	if e, ok := x.(compare.Eqer); ok {
+		return e.Eq(y)
+	}
+
+	if e, ok := y.(compare.Eqer); ok {
+		return e.Eq(x)
+	}
+
 	normalize := func(v interface{}) interface{} {
 		vv := reflect.ValueOf(v)
 		switch vv.Kind() {
@@ -110,29 +121,60 @@ func (n *Namespace) Ne(x, y interface{}) bool {
 
 // Ge returns the boolean truth of arg1 >= arg2.
 func (n *Namespace) Ge(a, b interface{}) bool {
-	left, right := n.compareGetFloat(a, b)
+	left, right := n.compareGet(a, b)
 	return left >= right
 }
 
 // Gt returns the boolean truth of arg1 > arg2.
 func (n *Namespace) Gt(a, b interface{}) bool {
-	left, right := n.compareGetFloat(a, b)
+	left, right := n.compareGet(a, b)
 	return left > right
 }
 
 // Le returns the boolean truth of arg1 <= arg2.
 func (n *Namespace) Le(a, b interface{}) bool {
-	left, right := n.compareGetFloat(a, b)
+	left, right := n.compareGet(a, b)
 	return left <= right
 }
 
 // Lt returns the boolean truth of arg1 < arg2.
 func (n *Namespace) Lt(a, b interface{}) bool {
-	left, right := n.compareGetFloat(a, b)
+	left, right := n.compareGet(a, b)
 	return left < right
 }
 
-func (*Namespace) compareGetFloat(a interface{}, b interface{}) (float64, float64) {
+// Conditional can be used as a ternary operator.
+// It returns a if condition, else b.
+func (n *Namespace) Conditional(condition bool, a, b interface{}) interface{} {
+	if condition {
+		return a
+	}
+	return b
+}
+
+func (*Namespace) compareGet(a interface{}, b interface{}) (float64, float64) {
+	if ac, ok := a.(compare.Comparer); ok {
+		c := ac.Compare(b)
+		if c < 0 {
+			return 1, 0
+		} else if c == 0 {
+			return 0, 0
+		} else {
+			return 0, 1
+		}
+	}
+
+	if bc, ok := b.(compare.Comparer); ok {
+		c := bc.Compare(a)
+		if c < 0 {
+			return 0, 1
+		} else if c == 0 {
+			return 0, 0
+		} else {
+			return 1, 0
+		}
+	}
+
 	var left, right float64
 	var leftStr, rightStr *string
 	av := reflect.ValueOf(a)

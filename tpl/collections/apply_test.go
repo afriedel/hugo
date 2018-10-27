@@ -18,15 +18,15 @@ import (
 
 	"fmt"
 
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl"
 	"github.com/stretchr/testify/require"
 )
 
 type templateFinder int
 
-func (templateFinder) Lookup(name string) *tpl.TemplateAdapter {
-	return nil
+func (templateFinder) Lookup(name string) (tpl.Template, bool) {
+	return nil, false
 }
 
 func (templateFinder) GetFuncs() map[string]interface{} {

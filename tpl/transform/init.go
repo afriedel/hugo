@@ -14,8 +14,8 @@
 package transform
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "transform"
@@ -85,6 +85,13 @@ func init() {
 			[]string{"plainify"},
 			[][2]string{
 				{`{{ plainify  "Hello <strong>world</strong>, gophers!" }}`, `Hello world, gophers!`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Remarshal,
+			nil,
+			[][2]string{
+				{`{{ "title = \"Hello World\"" | transform.Remarshal "json" | safeHTML }}`, "{\n   \"title\": \"Hello World\"\n}\n"},
 			},
 		)
 

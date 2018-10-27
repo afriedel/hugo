@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/spf13/hugo/deps"
+	"github.com/gohugoio/hugo/deps"
 )
 
 func TestByCountOrderOfTaxonomies(t *testing.T) {
@@ -45,22 +45,20 @@ func TestByCountOrderOfTaxonomies(t *testing.T) {
 		st = append(st, t.Name)
 	}
 
-	if !reflect.DeepEqual(st, []string{"a", "b", "c"}) {
-		t.Fatalf("ordered taxonomies do not match [a, b, c].  Got: %s", st)
+	expect := []string{"a", "b", "c", "x/y"}
+	if !reflect.DeepEqual(st, expect) {
+		t.Fatalf("ordered taxonomies do not match %v.  Got: %s", expect, st)
 	}
 }
 
 //
 func TestTaxonomiesWithAndWithoutContentFile(t *testing.T) {
 	for _, uglyURLs := range []bool{false, true} {
-		t.Run(fmt.Sprintf("uglyURLs=%t", uglyURLs), func(t *testing.T) {
-			for _, preserveTaxonomyNames := range []bool{false, true} {
-				t.Run(fmt.Sprintf("preserveTaxonomyNames=%t", preserveTaxonomyNames), func(t *testing.T) {
-					doTestTaxonomiesWithAndWithoutContentFile(t, preserveTaxonomyNames, uglyURLs)
-				})
-			}
-		})
-
+		for _, preserveTaxonomyNames := range []bool{false, true} {
+			t.Run(fmt.Sprintf("uglyURLs=%t,preserveTaxonomyNames=%t", uglyURLs, preserveTaxonomyNames), func(t *testing.T) {
+				doTestTaxonomiesWithAndWithoutContentFile(t, preserveTaxonomyNames, uglyURLs)
+			})
+		}
 	}
 }
 
@@ -80,6 +78,12 @@ tag = "tags"
 category = "categories"
 other = "others"
 empty = "empties"
+permalinked = "permalinkeds"
+subcats = "subcats"
+
+[permalinks]
+permalinkeds = "/perma/:slug/"
+subcats = "/subcats/:slug/"
 `
 
 	pageTemplate := `---
@@ -89,6 +93,10 @@ tags:
 categories:
 %s
 others:
+%s
+permalinkeds:
+%s
+subcats:
 %s
 ---
 # Doc
@@ -101,28 +109,22 @@ others:
 
 	fs := th.Fs
 
-	if preserveTaxonomyNames {
-		writeSource(t, fs, "content/p1.md", fmt.Sprintf(pageTemplate, "t1/c1", "- tag1", "- cat1", "- o1"))
-	} else {
-		// Check lower-casing of tags
-		writeSource(t, fs, "content/p1.md", fmt.Sprintf(pageTemplate, "t1/c1", "- Tag1", "- cAt1", "- o1"))
+	writeSource(t, fs, "content/p1.md", fmt.Sprintf(pageTemplate, "t1/c1", "- Tag1", "- cat1\n- \"cAt/dOg\"", "- o1", "- pl1", ""))
+	writeSource(t, fs, "content/p2.md", fmt.Sprintf(pageTemplate, "t2/c1", "- tag2", "- cat1", "- o1", "- pl1", ""))
+	writeSource(t, fs, "content/p3.md", fmt.Sprintf(pageTemplate, "t2/c12", "- tag2", "- cat2", "- o1", "- pl1", ""))
+	writeSource(t, fs, "content/p4.md", fmt.Sprintf(pageTemplate, "Hello World", "", "", "- \"Hello Hugo world\"", "- pl1", ""))
+	writeSource(t, fs, "content/p5.md", fmt.Sprintf(pageTemplate, "Sub/categories", "", "", "", "", "- \"sc0/sp1\""))
 
-	}
-	writeSource(t, fs, "content/p2.md", fmt.Sprintf(pageTemplate, "t2/c1", "- tag2", "- cat1", "- o1"))
-	writeSource(t, fs, "content/p3.md", fmt.Sprintf(pageTemplate, "t2/c12", "- tag2", "- cat2", "- o1"))
-	writeSource(t, fs, "content/p4.md", fmt.Sprintf(pageTemplate, "Hello World", "", "", "- \"Hello Hugo world\""))
+	writeNewContentFile(t, fs.Source, "Category Terms", "2017-01-01", "content/categories/_index.md", 10)
+	writeNewContentFile(t, fs.Source, "Tag1 List", "2017-01-01", "content/tags/Tag1/_index.md", 10)
 
-	writeNewContentFile(t, fs, "Category Terms", "2017-01-01", "content/categories/_index.md", 10)
-	writeNewContentFile(t, fs, "Tag1 List", "2017-01-01", "content/tags/tag1/_index.md", 10)
-
-	err := h.Build(BuildCfg{})
-
-	require.NoError(t, err)
+	require.NoError(t, h.Build(BuildCfg{}))
 
 	// So what we have now is:
 	// 1. categories with terms content page, but no content page for the only c1 category
 	// 2. tags with no terms content page, but content page for one of 2 tags (tag1)
 	// 3. the "others" taxonomy with no content pages.
+	// 4. the "permalinkeds" taxonomy with permalinks configuration.
 
 	pathFunc := func(s string) string {
 		if uglyURLs {
@@ -132,56 +134,109 @@ others:
 	}
 
 	// 1.
-	th.assertFileContent(pathFunc("public/categories/cat1/index.html"), "List", "Cat1")
+	if preserveTaxonomyNames {
+		th.assertFileContent(pathFunc("public/categories/cat1/index.html"), "List", "cat1")
+		th.assertFileContent(pathFunc("public/categories/cat-dog/index.html"), "List", "cAt/dOg")
+	} else {
+		th.assertFileContent(pathFunc("public/categories/cat1/index.html"), "List", "Cat1")
+		th.assertFileContent(pathFunc("public/categories/cat-dog/index.html"), "List", "Cat/Dog")
+	}
 	th.assertFileContent(pathFunc("public/categories/index.html"), "Terms List", "Category Terms")
 
 	// 2.
-	th.assertFileContent(pathFunc("public/tags/tag2/index.html"), "List", "Tag2")
+	if preserveTaxonomyNames {
+		th.assertFileContent(pathFunc("public/tags/tag2/index.html"), "List", "tag2")
+	} else {
+		th.assertFileContent(pathFunc("public/tags/tag2/index.html"), "List", "Tag2")
+	}
 	th.assertFileContent(pathFunc("public/tags/tag1/index.html"), "List", "Tag1")
 	th.assertFileContent(pathFunc("public/tags/index.html"), "Terms List", "Tags")
 
 	// 3.
-	th.assertFileContent(pathFunc("public/others/o1/index.html"), "List", "O1")
+	if preserveTaxonomyNames {
+		th.assertFileContent(pathFunc("public/others/o1/index.html"), "List", "o1")
+	} else {
+		th.assertFileContent(pathFunc("public/others/o1/index.html"), "List", "O1")
+	}
 	th.assertFileContent(pathFunc("public/others/index.html"), "Terms List", "Others")
+
+	// 4.
+	if preserveTaxonomyNames {
+		th.assertFileContent(pathFunc("public/perma/pl1/index.html"), "List", "pl1")
+	} else {
+		th.assertFileContent(pathFunc("public/perma/pl1/index.html"), "List", "Pl1")
+	}
+	// This looks kind of funky, but the taxonomy terms do not have a permalinks definition,
+	// for good reasons.
+	th.assertFileContent(pathFunc("public/permalinkeds/index.html"), "Terms List", "Permalinkeds")
 
 	s := h.Sites[0]
 
 	// Make sure that each KindTaxonomyTerm page has an appropriate number
 	// of KindTaxonomy pages in its Pages slice.
 	taxonomyTermPageCounts := map[string]int{
-		"tags":       2,
-		"categories": 2,
-		"others":     2,
-		"empties":    0,
+		"tags":         2,
+		"categories":   3,
+		"others":       2,
+		"empties":      0,
+		"permalinkeds": 1,
+		"subcats":      1,
 	}
 
 	for taxonomy, count := range taxonomyTermPageCounts {
 		term := s.getPage(KindTaxonomyTerm, taxonomy)
 		require.NotNil(t, term)
-		require.Len(t, term.Pages, count)
+		require.Len(t, term.Pages, count, taxonomy)
 
 		for _, page := range term.Pages {
 			require.Equal(t, KindTaxonomy, page.Kind)
 		}
 	}
 
+	fixTerm := func(s string) string {
+		if preserveTaxonomyNames {
+			return s
+		}
+		return strings.ToLower(s)
+	}
+
+	fixURL := func(s string) string {
+		if uglyURLs {
+			return strings.TrimRight(s, "/") + ".html"
+		}
+		return s
+	}
+
 	cat1 := s.getPage(KindTaxonomy, "categories", "cat1")
 	require.NotNil(t, cat1)
-	if uglyURLs {
-		require.Equal(t, "/blog/categories/cat1.html", cat1.RelPermalink())
-	} else {
-		require.Equal(t, "/blog/categories/cat1/", cat1.RelPermalink())
-	}
+	require.Equal(t, fixURL("/blog/categories/cat1/"), cat1.RelPermalink())
+
+	catdog := s.getPage(KindTaxonomy, "categories", fixTerm("cAt/dOg"))
+	require.NotNil(t, catdog)
+	require.Equal(t, fixURL("/blog/categories/cat-dog/"), catdog.RelPermalink())
+
+	pl1 := s.getPage(KindTaxonomy, "permalinkeds", "pl1")
+	require.NotNil(t, pl1)
+	require.Equal(t, fixURL("/blog/perma/pl1/"), pl1.RelPermalink())
+
+	permalinkeds := s.getPage(KindTaxonomyTerm, "permalinkeds")
+	require.NotNil(t, permalinkeds)
+	require.Equal(t, fixURL("/blog/permalinkeds/"), permalinkeds.RelPermalink())
+
+	// Issue #5223
+	sp1 := s.getPage(KindTaxonomy, "subcats", "sc0/sp1")
+	require.NotNil(t, sp1)
+	require.Equal(t, fixURL("/blog/subcats/sc0/sp1/"), sp1.RelPermalink())
 
 	// Issue #3070 preserveTaxonomyNames
 	if preserveTaxonomyNames {
 		helloWorld := s.getPage(KindTaxonomy, "others", "Hello Hugo world")
 		require.NotNil(t, helloWorld)
-		require.Equal(t, "Hello Hugo world", helloWorld.Title)
+		require.Equal(t, "Hello Hugo world", helloWorld.title)
 	} else {
 		helloWorld := s.getPage(KindTaxonomy, "others", "hello-hugo-world")
 		require.NotNil(t, helloWorld)
-		require.Equal(t, "Hello Hugo World", helloWorld.Title)
+		require.Equal(t, "Hello Hugo World", helloWorld.title)
 	}
 
 	// Issue #2977
