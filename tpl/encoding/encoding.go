@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package encoding provides template functions for encoding content.
 package encoding
 
 import (
@@ -50,9 +51,9 @@ func (ns *Namespace) Base64Encode(content interface{}) (string, error) {
 	return base64.StdEncoding.EncodeToString([]byte(conv)), nil
 }
 
-// Jsonify encodes a given object to JSON, returning pretty printed output.
+// Jsonify encodes a given object to JSON.
 func (ns *Namespace) Jsonify(v interface{}) (template.HTML, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := json.Marshal(v)
 	if err != nil {
 		return "", err
 	}

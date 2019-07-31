@@ -40,6 +40,7 @@ func init() {
 type Logger struct {
 	*jww.Notepad
 	ErrorCounter *jww.Counter
+	WarnCounter  *jww.Counter
 
 	// This is only set in server mode.
 	errors *bytes.Buffer
@@ -80,7 +81,10 @@ func NewErrorLogger() *Logger {
 	return newBasicLogger(jww.LevelError)
 }
 
-var ansiColorRe = regexp.MustCompile("(?s)\\033\\[\\d*(;\\d*)*m")
+var (
+	ansiColorRe = regexp.MustCompile("(?s)\\033\\[\\d*(;\\d*)*m")
+	errorRe     = regexp.MustCompile("^(ERROR|FATAL|WARN)")
+)
 
 type ansiCleaner struct {
 	w io.Writer
@@ -90,13 +94,60 @@ func (a ansiCleaner) Write(p []byte) (n int, err error) {
 	return a.w.Write(ansiColorRe.ReplaceAll(p, []byte("")))
 }
 
-func newLogger(stdoutThreshold, logThreshold jww.Threshold, outHandle, logHandle io.Writer, saveErrors bool) *Logger {
-	errorCounter := &jww.Counter{}
-	if logHandle != ioutil.Discard && terminal.IsTerminal(os.Stdout) {
+type labelColorizer struct {
+	w io.Writer
+}
+
+func (a labelColorizer) Write(p []byte) (n int, err error) {
+	replaced := errorRe.ReplaceAllStringFunc(string(p), func(m string) string {
+		switch m {
+		case "ERROR", "FATAL":
+			return terminal.Error(m)
+		case "WARN":
+			return terminal.Warning(m)
+		default:
+			return m
+		}
+	})
+	// io.MultiWriter will abort if we return a bigger write count than input
+	// bytes, so we lie a little.
+	_, err = a.w.Write([]byte(replaced))
+	return len(p), err
+
+}
+
+// InitGlobalLogger initializes the global logger, used in some rare cases.
+func InitGlobalLogger(stdoutThreshold, logThreshold jww.Threshold, outHandle, logHandle io.Writer) {
+	outHandle, logHandle = getLogWriters(outHandle, logHandle)
+
+	jww.SetStdoutOutput(outHandle)
+	jww.SetLogOutput(logHandle)
+	jww.SetLogThreshold(logThreshold)
+	jww.SetStdoutThreshold(stdoutThreshold)
+
+}
+
+func getLogWriters(outHandle, logHandle io.Writer) (io.Writer, io.Writer) {
+	isTerm := terminal.IsTerminal(os.Stdout)
+	if logHandle != ioutil.Discard && isTerm {
 		// Remove any Ansi coloring from log output
 		logHandle = ansiCleaner{w: logHandle}
 	}
-	listeners := []jww.LogListener{jww.LogCounter(errorCounter, jww.LevelError)}
+
+	if isTerm {
+		outHandle = labelColorizer{w: outHandle}
+	}
+
+	return outHandle, logHandle
+
+}
+
+func newLogger(stdoutThreshold, logThreshold jww.Threshold, outHandle, logHandle io.Writer, saveErrors bool) *Logger {
+	errorCounter := &jww.Counter{}
+	warnCounter := &jww.Counter{}
+	outHandle, logHandle = getLogWriters(outHandle, logHandle)
+
+	listeners := []jww.LogListener{jww.LogCounter(errorCounter, jww.LevelError), jww.LogCounter(warnCounter, jww.LevelWarn)}
 	var errorBuff *bytes.Buffer
 	if saveErrors {
 		errorBuff = new(bytes.Buffer)
@@ -115,6 +166,7 @@ func newLogger(stdoutThreshold, logThreshold jww.Threshold, outHandle, logHandle
 	return &Logger{
 		Notepad:      jww.NewNotepad(stdoutThreshold, logThreshold, outHandle, logHandle, "", log.Ldate|log.Ltime, listeners...),
 		ErrorCounter: errorCounter,
+		WarnCounter:  warnCounter,
 		errors:       errorBuff,
 	}
 }

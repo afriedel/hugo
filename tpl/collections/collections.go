@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package collections provides template functions for manipulating collections
+// such as arrays, maps, and slices.
 package collections
 
 import (
-	"errors"
 	"fmt"
 	"html/template"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"github.com/gohugoio/hugo/common/types"
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/helpers"
+	"github.com/pkg/errors"
 	"github.com/spf13/cast"
 )
 
@@ -240,43 +242,41 @@ func (ns *Namespace) First(limit interface{}, seq interface{}) (interface{}, err
 }
 
 // In returns whether v is in the set l.  l may be an array or slice.
-func (ns *Namespace) In(l interface{}, v interface{}) bool {
+func (ns *Namespace) In(l interface{}, v interface{}) (bool, error) {
 	if l == nil || v == nil {
-		return false
+		return false, nil
 	}
 
 	lv := reflect.ValueOf(l)
 	vv := reflect.ValueOf(v)
 
+	if !vv.Type().Comparable() {
+		return false, errors.Errorf("value to check must be comparable: %T", v)
+	}
+
+	// Normalize numeric types to float64 etc.
+	vvk := normalize(vv)
+
 	switch lv.Kind() {
 	case reflect.Array, reflect.Slice:
 		for i := 0; i < lv.Len(); i++ {
-			lvv := lv.Index(i)
-			lvv, isNil := indirect(lvv)
-			if isNil {
+			lvv, isNil := indirectInterface(lv.Index(i))
+			if isNil || !lvv.Type().Comparable() {
 				continue
 			}
-			switch lvv.Kind() {
-			case reflect.String:
-				if vv.Type() == lvv.Type() && vv.String() == lvv.String() {
-					return true
-				}
-			default:
-				if isNumber(vv.Kind()) && isNumber(lvv.Kind()) {
-					f1, err1 := numberToFloat(vv)
-					f2, err2 := numberToFloat(lvv)
-					if err1 == nil && err2 == nil && f1 == f2 {
-						return true
-					}
-				}
+
+			lvvk := normalize(lvv)
+
+			if lvvk == vvk {
+				return true, nil
 			}
 		}
 	case reflect.String:
 		if vv.Type() == lv.Type() && strings.Contains(lv.String(), vv.String()) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // Intersect returns the common elements in the given sets, l1 and l2.  l1 and
@@ -327,13 +327,17 @@ func (ns *Namespace) Group(key interface{}, items interface{}) (interface{}, err
 		return nil, errors.New("nil is not a valid key to group by")
 	}
 
+	if g, ok := items.(collections.Grouper); ok {
+		return g.Group(key, items)
+	}
+
 	in := newSliceElement(items)
 
 	if g, ok := in.(collections.Grouper); ok {
 		return g.Group(key, items)
 	}
 
-	return nil, fmt.Errorf("grouping not supported for type %T", items)
+	return nil, fmt.Errorf("grouping not supported for type %T %T", items, in)
 }
 
 // IsSet returns whether a given array, channel, slice, or map has a key
@@ -649,40 +653,38 @@ func (ns *Namespace) Union(l1, l2 interface{}) (interface{}, error) {
 
 // Uniq takes in a slice or array and returns a slice with subsequent
 // duplicate elements removed.
-func (ns *Namespace) Uniq(l interface{}) (interface{}, error) {
-	if l == nil {
+func (ns *Namespace) Uniq(seq interface{}) (interface{}, error) {
+	if seq == nil {
 		return make([]interface{}, 0), nil
 	}
 
-	lv := reflect.ValueOf(l)
-	lv, isNil := indirect(lv)
-	if isNil {
-		return nil, errors.New("invalid nil argument to Uniq")
-	}
+	v := reflect.ValueOf(seq)
+	var slice reflect.Value
 
-	var ret reflect.Value
-
-	switch lv.Kind() {
+	switch v.Kind() {
 	case reflect.Slice:
-		ret = reflect.MakeSlice(lv.Type(), 0, 0)
+		slice = reflect.MakeSlice(v.Type(), 0, 0)
 	case reflect.Array:
-		ret = reflect.MakeSlice(reflect.SliceOf(lv.Type().Elem()), 0, 0)
+		slice = reflect.MakeSlice(reflect.SliceOf(v.Type().Elem()), 0, 0)
 	default:
-		return nil, errors.New("Can't use Uniq on " + reflect.ValueOf(lv).Type().String())
+		return nil, errors.Errorf("type %T not supported", seq)
 	}
 
-	for i := 0; i != lv.Len(); i++ {
-		lvv := lv.Index(i)
-		lvv, isNil := indirect(lvv)
-		if isNil {
-			continue
+	seen := make(map[interface{}]bool)
+	for i := 0; i < v.Len(); i++ {
+		ev, _ := indirectInterface(v.Index(i))
+		if !ev.Type().Comparable() {
+			return nil, errors.New("elements must be comparable")
 		}
-
-		if !ns.In(ret.Interface(), lvv.Interface()) {
-			ret = reflect.Append(ret, lvv)
+		key := normalize(ev)
+		if _, found := seen[key]; !found {
+			slice = reflect.Append(slice, ev)
+			seen[key] = true
 		}
 	}
-	return ret.Interface(), nil
+
+	return slice.Interface(), nil
+
 }
 
 // KeyVals creates a key and values wrapper.

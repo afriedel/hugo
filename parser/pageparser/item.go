@@ -42,6 +42,10 @@ func (i Item) IsShortcodeName() bool {
 	return i.Type == tScName
 }
 
+func (i Item) IsInlineShortcodeName() bool {
+	return i.Type == tScNameInline
+}
+
 func (i Item) IsLeftShortcodeDelim() bool {
 	return i.Type == tLeftDelimScWithMarkup || i.Type == tLeftDelimScNoMarkup
 }
@@ -104,12 +108,12 @@ const (
 
 	// page items
 	TypeHTMLStart          // document starting with < as first non-whitespace
-	TypeHTMLComment        // We ignore leading comments
 	TypeLeadSummaryDivider // <!--more-->,  # more
 	TypeFrontMatterYAML
 	TypeFrontMatterTOML
 	TypeFrontMatterJSON
 	TypeFrontMatterORG
+	TypeEmoji
 	TypeIgnore // // The BOM Unicode byte order marker and possibly others
 
 	// shortcode items
@@ -119,6 +123,7 @@ const (
 	tRightDelimScWithMarkup
 	tScClose
 	tScName
+	tScNameInline
 	tScParam
 	tScParamVal
 

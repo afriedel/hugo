@@ -16,7 +16,7 @@ aliases: [/extras/highlighting/,/extras/highlight/,/tools/syntax-highlighting/]
 toc: true
 ---
 
-From Hugo 0.28, the default syntax hightlighter in Hugo is [Chroma](https://github.com/alecthomas/chroma); it is built in Go and is really, really fast -- and for the most important parts compatible with Pygments.
+From Hugo 0.28, the default syntax highlighter in Hugo is [Chroma](https://github.com/alecthomas/chroma); it is built in Go and is really, really fast -- and for the most important parts compatible with Pygments.
 
 If you want to continue to use Pygments (see below), set `pygmentsUseClassic=true` in your site config.
 
@@ -167,7 +167,7 @@ It is also possible to add syntax highlighting with GitHub flavored code fences.
 
 ## List of Chroma Highlighting Languages
 
-The full list of Chroma lexers and their aliases (which is the identifier used in the `hightlight` template func or when doing highlighting in code fences):
+The full list of Chroma lexers and their aliases (which is the identifier used in the `highlight` template func or when doing highlighting in code fences):
 
 {{< chroma-lexers >}}
 

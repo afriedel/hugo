@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ func TestGuessType(t *testing.T) {
 		{"html", "html"},
 		{"htm", "html"},
 		{"org", "org"},
-		{"excel", "unknown"},
+		{"excel", ""},
 	} {
 		result := GuessType(this.in)
 		if result != this.expect {
@@ -166,6 +166,27 @@ var containsAdditionalTestData = []struct {
 	{"", []byte(""), false},
 }
 
+func TestSliceToLower(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		value    []string
+		expected []string
+	}{
+		{[]string{"a", "b", "c"}, []string{"a", "b", "c"}},
+		{[]string{"a", "B", "c"}, []string{"a", "b", "c"}},
+		{[]string{"A", "B", "C"}, []string{"a", "b", "c"}},
+	}
+
+	for _, test := range tests {
+		res := SliceToLower(test.value)
+		for i, val := range res {
+			if val != test.expected[i] {
+				t.Errorf("Case mismatch. Expected %s, got %s", test.expected[i], res[i])
+			}
+		}
+	}
+}
+
 func TestReaderContains(t *testing.T) {
 	for i, this := range append(containsBenchTestData, containsAdditionalTestData...) {
 		result := ReaderContains(strings.NewReader(this.v1), this.v2)
@@ -211,6 +232,24 @@ func TestUniqueStrings(t *testing.T) {
 	if !reflect.DeepEqual(output, expected) {
 		t.Errorf("Expected %#v, got %#v\n", expected, output)
 	}
+}
+
+func TestUniqueStringsReuse(t *testing.T) {
+	in := []string{"a", "b", "a", "b", "c", "", "a", "", "d"}
+	output := UniqueStringsReuse(in)
+	expected := []string{"a", "b", "c", "", "d"}
+	if !reflect.DeepEqual(output, expected) {
+		t.Errorf("Expected %#v, got %#v\n", expected, output)
+	}
+}
+
+func TestUniqueStringsSorted(t *testing.T) {
+	assert := require.New(t)
+	in := []string{"a", "a", "b", "c", "b", "", "a", "", "d"}
+	output := UniqueStringsSorted(in)
+	expected := []string{"", "a", "b", "c", "d"}
+	assert.Equal(expected, output)
+	assert.Nil(UniqueStringsSorted(nil))
 }
 
 func TestFindAvailablePort(t *testing.T) {
@@ -272,7 +311,7 @@ func TestFastMD5FromFile(t *testing.T) {
 	req.NoError(err)
 	req.NotEqual(m3, m4)
 
-	m5, err := MD5FromFile(bf2)
+	m5, err := MD5FromReader(bf2)
 	req.NoError(err)
 	req.NotEqual(m4, m5)
 }
@@ -293,7 +332,7 @@ func BenchmarkMD5FromFileFast(b *testing.B) {
 				}
 				b.StartTimer()
 				if full {
-					if _, err := MD5FromFile(f); err != nil {
+					if _, err := MD5FromReader(f); err != nil {
 						b.Fatal(err)
 					}
 				} else {
@@ -305,5 +344,57 @@ func BenchmarkMD5FromFileFast(b *testing.B) {
 			}
 		})
 	}
+
+}
+
+func BenchmarkUniqueStrings(b *testing.B) {
+	input := []string{"a", "b", "d", "e", "d", "h", "a", "i"}
+
+	b.Run("Safe", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			result := UniqueStrings(input)
+			if len(result) != 6 {
+				b.Fatal(fmt.Sprintf("invalid count: %d", len(result)))
+			}
+		}
+	})
+
+	b.Run("Reuse slice", func(b *testing.B) {
+		b.StopTimer()
+		inputs := make([][]string, b.N)
+		for i := 0; i < b.N; i++ {
+			inputc := make([]string, len(input))
+			copy(inputc, input)
+			inputs[i] = inputc
+		}
+		b.StartTimer()
+		for i := 0; i < b.N; i++ {
+			inputc := inputs[i]
+
+			result := UniqueStringsReuse(inputc)
+			if len(result) != 6 {
+				b.Fatal(fmt.Sprintf("invalid count: %d", len(result)))
+			}
+		}
+	})
+
+	b.Run("Reuse slice sorted", func(b *testing.B) {
+		b.StopTimer()
+		inputs := make([][]string, b.N)
+		for i := 0; i < b.N; i++ {
+			inputc := make([]string, len(input))
+			copy(inputc, input)
+			inputs[i] = inputc
+		}
+		b.StartTimer()
+		for i := 0; i < b.N; i++ {
+			inputc := inputs[i]
+
+			result := UniqueStringsSorted(inputc)
+			if len(result) != 6 {
+				b.Fatal(fmt.Sprintf("invalid count: %d", len(result)))
+			}
+		}
+	})
 
 }

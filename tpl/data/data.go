@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package data provides template functions for working with external data
+// sources.
 package data
 
 import (
@@ -20,23 +22,29 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/gohugoio/hugo/cache/filecache"
 	"github.com/gohugoio/hugo/deps"
 	_errors "github.com/pkg/errors"
 )
 
 // New returns a new instance of the data-namespaced template functions.
 func New(deps *deps.Deps) *Namespace {
+
 	return &Namespace{
-		deps:   deps,
-		client: http.DefaultClient,
+		deps:         deps,
+		cacheGetCSV:  deps.FileCaches.GetCSVCache(),
+		cacheGetJSON: deps.FileCaches.GetJSONCache(),
+		client:       http.DefaultClient,
 	}
 }
 
 // Namespace provides template functions for the "data" namespace.
 type Namespace struct {
 	deps *deps.Deps
+
+	cacheGetJSON *filecache.Cache
+	cacheGetCSV  *filecache.Cache
 
 	client *http.Client
 }
@@ -48,40 +56,35 @@ type Namespace struct {
 // GetCSV returns nil or a slice slice to use in a short code.
 func (ns *Namespace) GetCSV(sep string, urlParts ...string) (d [][]string, err error) {
 	url := strings.Join(urlParts, "")
+	cache := ns.cacheGetCSV
 
-	var clearCacheSleep = func(i int, u string) {
-		ns.deps.Log.WARN.Printf("Retry #%d for %s and sleeping for %s", i, url, resSleep)
-		time.Sleep(resSleep)
-		deleteCache(url, ns.deps.Fs.Source, ns.deps.Cfg)
-	}
-
-	for i := 0; i <= resRetries; i++ {
-		var req *http.Request
-		req, err = http.NewRequest("GET", url, nil)
-		if err != nil {
-			return nil, _errors.Wrapf(err, "failed to create request for getCSV for resource %s", url)
+	unmarshal := func(b []byte) (bool, error) {
+		if !bytes.Contains(b, []byte(sep)) {
+			return false, _errors.Errorf("cannot find separator %s in CSV for %s", sep, url)
 		}
 
-		req.Header.Add("Accept", "text/csv")
-		req.Header.Add("Accept", "text/plain")
-
-		var c []byte
-		c, err = ns.getResource(req)
-		if err != nil {
-			return nil, _errors.Wrapf(err, "failed to read CSV resource %q", url)
-		}
-
-		if !bytes.Contains(c, []byte(sep)) {
-			return nil, _errors.Errorf("cannot find separator %s in CSV for %s", sep, url)
-		}
-
-		if d, err = parseCSV(c, sep); err != nil {
+		if d, err = parseCSV(b, sep); err != nil {
 			err = _errors.Wrapf(err, "failed to parse CSV file %s", url)
 
-			clearCacheSleep(i, url)
-			continue
+			return true, err
 		}
-		break
+
+		return false, nil
+	}
+
+	var req *http.Request
+	req, err = http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, _errors.Wrapf(err, "failed to create request for getCSV for resource %s", url)
+	}
+
+	req.Header.Add("Accept", "text/csv")
+	req.Header.Add("Accept", "text/plain")
+
+	err = ns.getResource(cache, unmarshal, req)
+	if err != nil {
+		ns.deps.Log.ERROR.Printf("Failed to get CSV resource %q: %s", url, err)
+		return nil, nil
 	}
 
 	return
@@ -90,44 +93,39 @@ func (ns *Namespace) GetCSV(sep string, urlParts ...string) (d [][]string, err e
 // GetJSON expects one or n-parts of a URL to a resource which can either be a local or a remote one.
 // If you provide multiple parts they will be joined together to the final URL.
 // GetJSON returns nil or parsed JSON to use in a short code.
-func (ns *Namespace) GetJSON(urlParts ...string) (v interface{}, err error) {
+func (ns *Namespace) GetJSON(urlParts ...string) (interface{}, error) {
+	var v interface{}
 	url := strings.Join(urlParts, "")
+	cache := ns.cacheGetJSON
 
-	for i := 0; i <= resRetries; i++ {
-		var req *http.Request
-		req, err = http.NewRequest("GET", url, nil)
-		if err != nil {
-			return nil, _errors.Wrapf(err, "Failed to create request for getJSON resource %s", url)
-		}
-
-		req.Header.Add("Accept", "application/json")
-
-		var c []byte
-		c, err = ns.getResource(req)
-		if err != nil {
-			return nil, _errors.Wrapf(err, "failed to get getJSON resource %q", url)
-		}
-		err = json.Unmarshal(c, &v)
-		if err != nil {
-			ns.deps.Log.WARN.Printf("Cannot read JSON from resource %s: %s", url, err)
-			ns.deps.Log.WARN.Printf("Retry #%d for %s and sleeping for %s", i, url, resSleep)
-			time.Sleep(resSleep)
-			deleteCache(url, ns.deps.Fs.Source, ns.deps.Cfg)
-			continue
-		}
-		break
-	}
-
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, _errors.Wrapf(err, "failed to get getJSON resource %q", url)
+		return nil, _errors.Wrapf(err, "Failed to create request for getJSON resource %s", url)
 	}
-	return
+
+	unmarshal := func(b []byte) (bool, error) {
+		err := json.Unmarshal(b, &v)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+
+	req.Header.Add("Accept", "application/json")
+
+	err = ns.getResource(cache, unmarshal, req)
+	if err != nil {
+		ns.deps.Log.ERROR.Printf("Failed to get JSON resource %q: %s", url, err)
+		return nil, nil
+	}
+
+	return v, nil
 }
 
 // parseCSV parses bytes of CSV data into a slice slice string or an error
 func parseCSV(c []byte, sep string) ([][]string, error) {
 	if len(sep) != 1 {
-		return nil, errors.New("Incorrect length of csv separator: " + sep)
+		return nil, errors.New("Incorrect length of CSV separator: " + sep)
 	}
 	b := bytes.NewReader(c)
 	r := csv.NewReader(b)

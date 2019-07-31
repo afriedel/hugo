@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gohugoio/hugo/common/maps"
+	"github.com/niklasfasching/go-org/org"
 
-	"github.com/chaseadamsio/goorgeous"
 	bp "github.com/gohugoio/hugo/bufferpool"
 	"github.com/gohugoio/hugo/config"
 	"github.com/miekg/mmark"
@@ -41,6 +41,12 @@ import (
 
 // SummaryDivider denotes where content summarization should end. The default is "<!--more-->".
 var SummaryDivider = []byte("<!--more-->")
+
+var (
+	openingPTag        = []byte("<p>")
+	closingPTag        = []byte("</p>")
+	paragraphIndicator = []byte("<p")
+)
 
 // ContentSpec provides functionality to render markdown content.
 type ContentSpec struct {
@@ -57,7 +63,7 @@ type ContentSpec struct {
 	Highlight            func(code, lang, optsStr string) (string, error)
 	defatultPygmentsOpts map[string]string
 
-	cfg config.Provider
+	Cfg config.Provider
 }
 
 // NewContentSpec returns a ContentSpec initialized
@@ -73,7 +79,7 @@ func NewContentSpec(cfg config.Provider) (*ContentSpec, error) {
 		BuildExpired:               cfg.GetBool("buildExpired"),
 		BuildDrafts:                cfg.GetBool("buildDrafts"),
 
-		cfg: cfg,
+		Cfg: cfg,
 	}
 
 	// Highlighting setup
@@ -119,6 +125,7 @@ type BlackFriday struct {
 	PlainIDAnchors        bool
 	Extensions            []string
 	ExtensionsMask        []string
+	SkipHTML              bool
 }
 
 // NewBlackfriday creates a new Blackfriday filled with site config or some sane defaults.
@@ -135,6 +142,7 @@ func newBlackfriday(config map[string]interface{}) *BlackFriday {
 		"latexDashes":           true,
 		"plainIDAnchors":        true,
 		"taskLists":             true,
+		"skipHTML":              false,
 	}
 
 	maps.ToLower(defaultParam)
@@ -145,10 +153,8 @@ func newBlackfriday(config map[string]interface{}) *BlackFriday {
 		siteConfig[k] = v
 	}
 
-	if config != nil {
-		for k, v := range config {
-			siteConfig[k] = v
-		}
+	for k, v := range config {
+		siteConfig[k] = v
 	}
 
 	combinedConfig := &BlackFriday{}
@@ -300,6 +306,10 @@ func (c *ContentSpec) getHTMLRenderer(defaultFlags int, ctx *RenderingContext) b
 		htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
 	}
 
+	if ctx.Config.SkipHTML {
+		htmlFlags |= blackfriday.HTML_SKIP_HTML
+	}
+
 	return &HugoHTMLRenderer{
 		cs:               c,
 		RenderingContext: ctx,
@@ -376,7 +386,7 @@ func (c *ContentSpec) getMmarkHTMLRenderer(defaultFlags int, ctx *RenderingConte
 	return &HugoMmarkHTMLRenderer{
 		cs:       c,
 		Renderer: mmark.HtmlRendererWithParameters(htmlFlags, "", "", renderParameters),
-		Cfg:      c.cfg,
+		Cfg:      c.Cfg,
 	}
 }
 
@@ -501,12 +511,6 @@ func TotalWords(s string) int {
 	return n
 }
 
-// Old implementation only kept for benchmark comparison.
-// TODO(bep) remove
-func totalWordsOld(s string) int {
-	return len(strings.Fields(s))
-}
-
 // TruncateWordsByRune truncates words by runes.
 func (c *ContentSpec) TruncateWordsByRune(in []string) (string, bool) {
 	words := make([]string, len(in))
@@ -574,6 +578,21 @@ func (c *ContentSpec) TruncateWordsToWholeSentence(s string) (string, bool) {
 	}
 
 	return strings.TrimSpace(s[:endIndex]), endIndex < len(s)
+}
+
+// TrimShortHTML removes the <p>/</p> tags from HTML input in the situation
+// where said tags are the only <p> tags in the input and enclose the content
+// of the input (whitespace excluded).
+func (c *ContentSpec) TrimShortHTML(input []byte) []byte {
+	first := bytes.Index(input, paragraphIndicator)
+	last := bytes.LastIndex(input, paragraphIndicator)
+	if first == last {
+		input = bytes.TrimSpace(input)
+		input = bytes.TrimPrefix(input, openingPTag)
+		input = bytes.TrimSuffix(input, closingPTag)
+		input = bytes.TrimSpace(input)
+	}
+	return input
 }
 
 func isEndOfSentence(r rune) bool {
@@ -731,10 +750,24 @@ func getPandocContent(ctx *RenderingContext) []byte {
 }
 
 func orgRender(ctx *RenderingContext, c ContentSpec) []byte {
-	content := ctx.Content
-	cleanContent := bytes.Replace(content, []byte("# more"), []byte(""), 1)
-	return goorgeous.Org(cleanContent,
-		c.getHTMLRenderer(blackfriday.HTML_TOC, ctx))
+	config := org.New()
+	config.Log = jww.WARN
+	writer := org.NewHTMLWriter()
+	writer.HighlightCodeBlock = func(source, lang string) string {
+		highlightedSource, err := c.Highlight(source, lang, "")
+		if err != nil {
+			jww.ERROR.Printf("Could not highlight source as lang %s. Using raw source.", lang)
+			return source
+		}
+		return highlightedSource
+	}
+
+	html, err := config.Parse(bytes.NewReader(ctx.Content), ctx.DocumentName).Write(writer)
+	if err != nil {
+		jww.ERROR.Printf("Could not render org: %s. Using unrendered content.", err)
+		return ctx.Content
+	}
+	return []byte(html)
 }
 
 func externallyRenderContent(ctx *RenderingContext, path string, args []string) []byte {
@@ -749,7 +782,7 @@ func externallyRenderContent(ctx *RenderingContext, path string, args []string) 
 	err := cmd.Run()
 	// Most external helpers exit w/ non-zero exit code only if severe, i.e.
 	// halting errors occurred. -> log stderr output regardless of state of err
-	for _, item := range strings.Split(string(cmderr.Bytes()), "\n") {
+	for _, item := range strings.Split(cmderr.String(), "\n") {
 		item := strings.TrimSpace(item)
 		if item != "" {
 			jww.ERROR.Printf("%s: %s", ctx.DocumentName, item)

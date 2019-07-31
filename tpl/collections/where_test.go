@@ -38,13 +38,31 @@ func TestWhere(t *testing.T) {
 	d5 := d4.Add(1 * time.Hour)
 	d6 := d5.Add(1 * time.Hour)
 
-	for i, test := range []struct {
+	type testt struct {
 		seq    interface{}
 		key    interface{}
 		op     string
 		match  interface{}
 		expect interface{}
-	}{
+	}
+
+	createTestVariants := func(test testt) []testt {
+		testVariants := []testt{test}
+		if islice := ToTstXIs(test.seq); islice != nil {
+			variant := test
+			variant.seq = islice
+			expect := ToTstXIs(test.expect)
+			if expect != nil {
+				variant.expect = expect
+			}
+			testVariants = append(testVariants, variant)
+		}
+
+		return testVariants
+
+	}
+
+	for i, test := range []testt{
 		{
 			seq: []map[int]string{
 				{1: "a", 2: "m"}, {1: "c", 2: "d"}, {1: "e", 3: "m"},
@@ -62,6 +80,69 @@ func TestWhere(t *testing.T) {
 			expect: []map[string]int{
 				{"a": 3, "b": 4},
 			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0,
+			expect: []map[string]float64{{"a": 3, "b": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "!=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 5, "x": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "<",
+			expect: []map[string]float64{{"a": 1, "b": 2}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4, op: "<",
+			expect: []map[string]float64{{"a": 1, "b": 2}},
+		},
+		{
+			seq: []map[string]int{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "<",
+			expect: []map[string]int{{"a": 1, "b": 2}},
+		},
+		{
+			seq: []map[string]int{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.2, op: "<",
+			expect: []map[string]int{{"a": 1, "b": 2}, {"a": 3, "b": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 4.0, op: "<=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 3, "b": 4}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 3}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 2.0, op: ">",
+			expect: []map[string]float64{{"a": 3, "b": 3}},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 3}, {"a": 5, "x": 4},
+			},
+			key: "b", match: 2.0, op: ">=",
+			expect: []map[string]float64{{"a": 1, "b": 2}, {"a": 3, "b": 3}},
 		},
 		{
 			seq: []TstX{
@@ -119,6 +200,15 @@ func TestWhere(t *testing.T) {
 		},
 		{
 			seq: []map[string]TstX{
+				{"baz": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "c", B: "d"}}, {"foo": TstX{A: "e", B: "f"}},
+			},
+			key: "foo.B", match: "d",
+			expect: []map[string]TstX{
+				{"foo": TstX{A: "c", B: "d"}},
+			},
+		},
+		{
+			seq: []map[string]TstX{
 				{"foo": TstX{A: "a", B: "b"}}, {"foo": TstX{A: "c", B: "d"}}, {"foo": TstX{A: "e", B: "f"}},
 			},
 			key: ".foo.B", match: "d",
@@ -142,6 +232,24 @@ func TestWhere(t *testing.T) {
 			key: "foo.TstRp", match: "rc",
 			expect: []map[string]*TstX{
 				{"foo": &TstX{A: "c", B: "d"}},
+			},
+		},
+		{
+			seq: []TstXIHolder{
+				{&TstX{A: "a", B: "b"}}, {&TstX{A: "c", B: "d"}}, {&TstX{A: "e", B: "f"}},
+			},
+			key: "XI.TstRp", match: "rc",
+			expect: []TstXIHolder{
+				{&TstX{A: "c", B: "d"}},
+			},
+		},
+		{
+			seq: []TstXIHolder{
+				{&TstX{A: "a", B: "b"}}, {&TstX{A: "c", B: "d"}}, {&TstX{A: "e", B: "f"}},
+			},
+			key: "XI.A", match: "e",
+			expect: []TstXIHolder{
+				{&TstX{A: "e", B: "f"}},
 			},
 		},
 		{
@@ -181,6 +289,15 @@ func TestWhere(t *testing.T) {
 			},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: ">", match: 3.0,
+			expect: []map[string]float64{
+				{"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+		},
+		{
 			seq: []TstX{
 				{A: "a", B: "b"}, {A: "c", B: "d"}, {A: "e", B: "f"},
 			},
@@ -195,6 +312,15 @@ func TestWhere(t *testing.T) {
 			},
 			key: "b", op: "in", match: []int{3, 4, 5},
 			expect: []map[string]int{
+				{"a": 3, "b": 4},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "in", match: []float64{3, 4, 5},
+			expect: []map[string]float64{
 				{"a": 3, "b": 4},
 			},
 		},
@@ -280,6 +406,15 @@ func TestWhere(t *testing.T) {
 			},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "in", match: ns.Slice(3.0, 4.0, 5.0),
+			expect: []map[string]float64{
+				{"a": 3, "b": 4},
+			},
+		},
+		{
 			seq: []map[string]time.Time{
 				{"a": d1, "b": d2}, {"a": d3, "b": d4}, {"a": d5, "b": d6},
 			},
@@ -332,6 +467,31 @@ func TestWhere(t *testing.T) {
 			expect: []map[string]int{},
 		},
 		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "", match: nil,
+			expect: []map[string]float64{
+				{"a": 3},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: "!=", match: nil,
+			expect: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 5, "b": 6},
+			},
+		},
+		{
+			seq: []map[string]float64{
+				{"a": 1, "b": 2}, {"a": 3}, {"a": 5, "b": 6},
+			},
+			key: "b", op: ">", match: nil,
+			expect: []map[string]float64{},
+		},
+		{
 			seq: []map[string]bool{
 				{"a": true, "b": false}, {"c": true, "b": true}, {"d": true, "b": false},
 			},
@@ -356,9 +516,17 @@ func TestWhere(t *testing.T) {
 			key: "b", op: ">", match: false,
 			expect: []map[string]bool{},
 		},
+		{
+			seq: []map[string]bool{
+				{"a": true, "b": false}, {"c": true, "b": true}, {"d": true, "b": false},
+			},
+			key: "b.z", match: false,
+			expect: []map[string]bool{},
+		},
 		{seq: (*[]TstX)(nil), key: "A", match: "a", expect: false},
 		{seq: TstX{A: "a", B: "b"}, key: "A", match: "a", expect: false},
-		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B", match: "d", expect: false},
+		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B", match: "d", expect: []map[string]*TstX{}},
+		{seq: []map[string]*TstX{{"foo": nil}}, key: "foo.B.Z", match: "d", expect: []map[string]*TstX{}},
 		{
 			seq: []TstX{
 				{A: "a", B: "b"}, {A: "c", B: "d"}, {A: "e", B: "f"},
@@ -390,26 +558,32 @@ func TestWhere(t *testing.T) {
 			},
 		},
 	} {
-		var results interface{}
-		var err error
 
-		if len(test.op) > 0 {
-			results, err = ns.Where(test.seq, test.key, test.op, test.match)
-		} else {
-			results, err = ns.Where(test.seq, test.key, test.match)
-		}
-		if b, ok := test.expect.(bool); ok && !b {
-			if err == nil {
-				t.Errorf("[%d] Where didn't return an expected error", i)
-			}
-		} else {
-			if err != nil {
-				t.Errorf("[%d] failed: %s", i, err)
-				continue
-			}
-			if !reflect.DeepEqual(results, test.expect) {
-				t.Errorf("[%d] Where clause matching %v with %v, got %v but expected %v", i, test.key, test.match, results, test.expect)
-			}
+		testVariants := createTestVariants(test)
+		for j, test := range testVariants {
+			name := fmt.Sprintf("[%d/%d] %T %s %s", i, j, test.seq, test.op, test.key)
+			t.Run(name, func(t *testing.T) {
+				var results interface{}
+				var err error
+
+				if len(test.op) > 0 {
+					results, err = ns.Where(test.seq, test.key, test.op, test.match)
+				} else {
+					results, err = ns.Where(test.seq, test.key, test.match)
+				}
+				if b, ok := test.expect.(bool); ok && !b {
+					if err == nil {
+						t.Fatalf("[%d] Where didn't return an expected error", i)
+					}
+				} else {
+					if err != nil {
+						t.Fatalf("[%d] failed: %s", i, err)
+					}
+					if !reflect.DeepEqual(results, test.expect) {
+						t.Fatalf("Where clause matching %v with %v in seq %v (%T),\ngot\n%v (%T) but expected\n%v (%T)", test.key, test.match, test.seq, test.seq, results, results, test.expect, test.expect)
+					}
+				}
+			})
 		}
 	}
 

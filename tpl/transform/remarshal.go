@@ -2,8 +2,9 @@ package transform
 
 import (
 	"bytes"
-	"errors"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/gohugoio/hugo/parser"
 	"github.com/gohugoio/hugo/parser/metadecoders"
@@ -34,12 +35,15 @@ func (ns *Namespace) Remarshal(format string, data interface{}) (string, error) 
 		return "", err
 	}
 
-	fromFormat, err := detectFormat(from)
+	fromFormat := metadecoders.Default.FormatFromContentString(from)
+	if fromFormat == "" {
+		return "", errors.New("failed to detect format from content")
+	}
+
+	meta, err := metadecoders.Default.UnmarshalToMap([]byte(from), fromFormat)
 	if err != nil {
 		return "", err
 	}
-
-	meta, err := metadecoders.UnmarshalToMap([]byte(from), fromFormat)
 
 	var result bytes.Buffer
 	if err := parser.InterfaceToConfig(meta, mark, &result); err != nil {
@@ -55,25 +59,4 @@ func toFormatMark(format string) (metadecoders.Format, error) {
 	}
 
 	return "", errors.New("failed to detect target data serialization format")
-}
-
-func detectFormat(data string) (metadecoders.Format, error) {
-	jsonIdx := strings.Index(data, "{")
-	yamlIdx := strings.Index(data, ":")
-	tomlIdx := strings.Index(data, "=")
-
-	if jsonIdx != -1 && (yamlIdx == -1 || jsonIdx < yamlIdx) && (tomlIdx == -1 || jsonIdx < tomlIdx) {
-		return metadecoders.JSON, nil
-	}
-
-	if yamlIdx != -1 && (tomlIdx == -1 || yamlIdx < tomlIdx) {
-		return metadecoders.YAML, nil
-	}
-
-	if tomlIdx != -1 {
-		return metadecoders.TOML, nil
-	}
-
-	return "", errors.New("failed to detect data serialization format")
-
 }

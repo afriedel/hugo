@@ -23,12 +23,15 @@ var (
 	tstRightMD   = nti(tRightDelimScWithMarkup, "%}}")
 	tstSCClose   = nti(tScClose, "/")
 	tstSC1       = nti(tScName, "sc1")
+	tstSC1Inline = nti(tScNameInline, "sc1.inline")
+	tstSC2Inline = nti(tScNameInline, "sc2.inline")
 	tstSC2       = nti(tScName, "sc2")
 	tstSC3       = nti(tScName, "sc3")
 	tstSCSlash   = nti(tScName, "sc/sub")
 	tstParam1    = nti(tScParam, "param1")
 	tstParam2    = nti(tScParam, "param2")
 	tstVal       = nti(tScParamVal, "Hello World")
+	tstText      = nti(tText, "Hello World")
 )
 
 var shortCodeLexerTests = []lexerTest{
@@ -146,15 +149,27 @@ var shortCodeLexerTests = []lexerTest{
 		nti(tError, "comment must be closed")}},
 	{"commented out, misplaced close", `{{</* sc1 >}}*/`, []Item{
 		nti(tError, "comment must be closed")}},
+	// Inline shortcodes
+	{"basic inline", `{{< sc1.inline >}}Hello World{{< /sc1.inline >}}`, []Item{tstLeftNoMD, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSCClose, tstSC1Inline, tstRightNoMD, tstEOF}},
+	{"basic inline with space", `{{< sc1.inline >}}Hello World{{< / sc1.inline >}}`, []Item{tstLeftNoMD, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSCClose, tstSC1Inline, tstRightNoMD, tstEOF}},
+	{"inline self closing", `{{< sc1.inline >}}Hello World{{< /sc1.inline >}}Hello World{{< sc1.inline />}}`, []Item{tstLeftNoMD, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSCClose, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSC1Inline, tstSCClose, tstRightNoMD, tstEOF}},
+	{"inline self closing, then a new inline", `{{< sc1.inline >}}Hello World{{< /sc1.inline >}}Hello World{{< sc1.inline />}}{{< sc2.inline >}}Hello World{{< /sc2.inline >}}`, []Item{
+		tstLeftNoMD, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSCClose, tstSC1Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSC1Inline, tstSCClose, tstRightNoMD,
+		tstLeftNoMD, tstSC2Inline, tstRightNoMD, tstText, tstLeftNoMD, tstSCClose, tstSC2Inline, tstRightNoMD, tstEOF}},
+	{"inline with template syntax", `{{< sc1.inline >}}{{ .Get 0 }}{{ .Get 1 }}{{< /sc1.inline >}}`, []Item{tstLeftNoMD, tstSC1Inline, tstRightNoMD, nti(tText, "{{ .Get 0 }}"), nti(tText, "{{ .Get 1 }}"), tstLeftNoMD, tstSCClose, tstSC1Inline, tstRightNoMD, tstEOF}},
+	{"inline with nested shortcode (not supported)", `{{< sc1.inline >}}Hello World{{< sc1 >}}{{< /sc1.inline >}}`, []Item{tstLeftNoMD, tstSC1Inline, tstRightNoMD, tstText, nti(tError, "inline shortcodes do not support nesting")}},
+	{"inline case mismatch", `{{< sc1.Inline >}}Hello World{{< /sc1.Inline >}}`, []Item{tstLeftNoMD, nti(tError, "period in shortcode name only allowed for inline identifiers")}},
 }
 
 func TestShortcodeLexer(t *testing.T) {
 	t.Parallel()
 	for i, test := range shortCodeLexerTests {
-		items := collect([]byte(test.input), true, lexMainSection)
-		if !equal(items, test.items) {
-			t.Errorf("[%d] %s: got\n\t%v\nexpected\n\t%v", i, test.name, items, test.items)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			items := collect([]byte(test.input), true, lexMainSection)
+			if !equal(items, test.items) {
+				t.Errorf("[%d] %s: got\n\t%v\nexpected\n\t%v", i, test.name, items, test.items)
+			}
+		})
 	}
 }
 
@@ -163,10 +178,11 @@ func BenchmarkShortcodeLexer(b *testing.B) {
 	for i, input := range shortCodeLexerTests {
 		testInputs[i] = []byte(input.input)
 	}
+	var cfg Config
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, input := range testInputs {
-			items := collect(input, true, lexMainSection)
+			items := collectWithConfig(input, true, lexMainSection, cfg)
 			if len(items) == 0 {
 			}
 

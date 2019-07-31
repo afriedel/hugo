@@ -25,9 +25,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/pkg/errors"
-
-	"github.com/gohugoio/hugo/helpers"
 )
 
 const commitPrefix = "releaser:"
@@ -52,8 +51,8 @@ type ReleaseHandler struct {
 	git func(args ...string) (string, error)
 }
 
-func (r ReleaseHandler) calculateVersions() (helpers.HugoVersion, helpers.HugoVersion) {
-	newVersion := helpers.MustParseHugoVersion(r.cliVersion)
+func (r ReleaseHandler) calculateVersions() (hugo.Version, hugo.Version) {
+	newVersion := hugo.MustParseVersion(r.cliVersion)
 	finalVersion := newVersion.Next()
 	finalVersion.PatchLevel = 0
 
@@ -95,6 +94,9 @@ func (r *ReleaseHandler) Run() error {
 
 	version := newVersion.String()
 	tag := "v" + version
+	isPatch := newVersion.PatchLevel > 0
+	mainVersion := newVersion
+	mainVersion.PatchLevel = 0
 
 	// Exit early if tag already exists
 	exists, err := tagExists(tag)
@@ -103,7 +105,7 @@ func (r *ReleaseHandler) Run() error {
 	}
 
 	if exists {
-		return fmt.Errorf("Tag %q already exists", tag)
+		return fmt.Errorf("tag %q already exists", tag)
 	}
 
 	var changeLogFromTag string
@@ -129,8 +131,8 @@ func (r *ReleaseHandler) Run() error {
 		return err
 	}
 
-	prepareRelaseNotes := relNotesState == releaseNotesNone
-	shouldRelease := relNotesState == releaseNotesReady
+	prepareRelaseNotes := isPatch || relNotesState == releaseNotesNone
+	shouldRelease := isPatch || relNotesState == releaseNotesReady
 
 	defer r.gitPush() // TODO(bep)
 
@@ -153,7 +155,7 @@ func (r *ReleaseHandler) Run() error {
 	}
 
 	if prepareRelaseNotes {
-		releaseNotesFile, err := r.writeReleaseNotesToTemp(version, gitCommits, gitCommitsDocs)
+		releaseNotesFile, err := r.writeReleaseNotesToTemp(version, isPatch, gitCommits, gitCommitsDocs)
 		if err != nil {
 			return err
 		}
@@ -161,7 +163,14 @@ func (r *ReleaseHandler) Run() error {
 		if _, err := r.git("add", releaseNotesFile); err != nil {
 			return err
 		}
-		if _, err := r.git("commit", "-m", fmt.Sprintf("%s Add release notes draft for %s\n\nRename to *-ready.md to continue. [ci skip]", commitPrefix, newVersion)); err != nil {
+
+		commitMsg := fmt.Sprintf("%s Add release notes for %s", commitPrefix, newVersion)
+		if !isPatch {
+			commitMsg += "\n\nRename to *-ready.md to continue."
+		}
+		commitMsg += "\n[ci skip]"
+
+		if _, err := r.git("commit", "-m", commitMsg); err != nil {
 			return err
 		}
 	}
@@ -186,8 +195,14 @@ func (r *ReleaseHandler) Run() error {
 
 	releaseNotesFile := getReleaseNotesDocsTempFilename(version, true)
 
+	title, description := version, version
+	if isPatch {
+		title = "Hugo " + version + ": A couple of Bug Fixes"
+		description = "This version fixes a couple of bugs introduced in " + mainVersion.String() + "."
+	}
+
 	// Write the release notes to the docs site as well.
-	docFile, err := r.writeReleaseNotesToDocs(version, releaseNotesFile)
+	docFile, err := r.writeReleaseNotesToDocs(title, description, releaseNotesFile)
 	if err != nil {
 		return err
 	}
@@ -261,14 +276,14 @@ func (r *ReleaseHandler) release(releaseNotesFile string) error {
 	return nil
 }
 
-func (r *ReleaseHandler) bumpVersions(ver helpers.HugoVersion) error {
+func (r *ReleaseHandler) bumpVersions(ver hugo.Version) error {
 	toDev := ""
 
 	if ver.Suffix != "" {
 		toDev = ver.Suffix
 	}
 
-	if err := r.replaceInFile("helpers/hugo.go",
+	if err := r.replaceInFile("common/hugo/version_current.go",
 		`Number:(\s{4,})(.*),`, fmt.Sprintf(`Number:${1}%.2f,`, ver.Number),
 		`PatchLevel:(\s*)(.*),`, fmt.Sprintf(`PatchLevel:${1}%d,`, ver.PatchLevel),
 		`Suffix:(\s{4,})".*",`, fmt.Sprintf(`Suffix:${1}"%s",`, toDev)); err != nil {
@@ -296,12 +311,6 @@ func (r *ReleaseHandler) bumpVersions(ver helpers.HugoVersion) error {
 
 	if err := r.replaceInFile("commands/new.go",
 		`min_version = "(.*)"`, fmt.Sprintf(`min_version = "%s"`, minVersion)); err != nil {
-		return err
-	}
-
-	// docs/config.toml
-	if err := r.replaceInFile("docs/config.toml",
-		`release = "(.*)"`, fmt.Sprintf(`release = "%s"`, ver)); err != nil {
 		return err
 	}
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,16 @@
 package hugofs
 
 import (
+	"os"
+
 	"github.com/gohugoio/hugo/config"
 	"github.com/spf13/afero"
 )
 
-// Os points to an Os Afero file system.
-var Os = &afero.OsFs{}
+var (
+	// Os points to the (real) Os filesystem.
+	Os = &afero.OsFs{}
+)
 
 // Fs abstracts the file system to separate source and destination file systems
 // and allows both to be mocked for testing.
@@ -79,4 +83,8 @@ func getWorkingDirFs(base afero.Fs, cfg config.Provider) *afero.BasePathFs {
 	}
 
 	return nil
+}
+
+func isWrite(flag int) bool {
+	return flag&os.O_RDWR != 0 || flag&os.O_WRONLY != 0
 }

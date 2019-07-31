@@ -41,8 +41,9 @@ LINE 8
 	location := locateErrorInString(lines, lineMatcher)
 	assert.Equal([]string{"LINE 3", "LINE 4", "This is THEONE", "LINE 6", "LINE 7"}, location.Lines)
 
-	assert.Equal(5, location.LineNumber)
-	assert.Equal(2, location.Pos)
+	pos := location.Position()
+	assert.Equal(5, pos.LineNumber)
+	assert.Equal(2, location.LinesPos)
 
 	assert.Equal([]string{"This is THEONE"}, locateErrorInString(`This is THEONE`, lineMatcher).Lines)
 
@@ -50,32 +51,32 @@ LINE 8
 This is THEONE
 L2
 `, lineMatcher)
-	assert.Equal(2, location.LineNumber)
-	assert.Equal(1, location.Pos)
+	assert.Equal(2, location.Position().LineNumber)
+	assert.Equal(1, location.LinesPos)
 	assert.Equal([]string{"L1", "This is THEONE", "L2", ""}, location.Lines)
 
 	location = locateErrorInString(`This is THEONE
 L2
 `, lineMatcher)
-	assert.Equal(0, location.Pos)
+	assert.Equal(0, location.LinesPos)
 	assert.Equal([]string{"This is THEONE", "L2", ""}, location.Lines)
 
 	location = locateErrorInString(`L1
 This THEONE
 `, lineMatcher)
 	assert.Equal([]string{"L1", "This THEONE", ""}, location.Lines)
-	assert.Equal(1, location.Pos)
+	assert.Equal(1, location.LinesPos)
 
 	location = locateErrorInString(`L1
 L2
 This THEONE
 `, lineMatcher)
 	assert.Equal([]string{"L1", "L2", "This THEONE", ""}, location.Lines)
-	assert.Equal(2, location.Pos)
+	assert.Equal(2, location.LinesPos)
 
 	location = locateErrorInString("NO MATCH", lineMatcher)
-	assert.Equal(-1, location.LineNumber)
-	assert.Equal(-1, location.Pos)
+	assert.Equal(-1, location.Position().LineNumber)
+	assert.Equal(-1, location.LinesPos)
 	assert.Equal(0, len(location.Lines))
 
 	lineMatcher = func(m LineMatcher) bool {
@@ -94,8 +95,8 @@ I
 J`, lineMatcher)
 
 	assert.Equal([]string{"D", "E", "F", "G", "H"}, location.Lines)
-	assert.Equal(6, location.LineNumber)
-	assert.Equal(2, location.Pos)
+	assert.Equal(6, location.Position().LineNumber)
+	assert.Equal(2, location.LinesPos)
 
 	// Test match EOF
 	lineMatcher = func(m LineMatcher) bool {
@@ -108,8 +109,8 @@ C
 `, lineMatcher)
 
 	assert.Equal([]string{"B", "C", ""}, location.Lines)
-	assert.Equal(4, location.LineNumber)
-	assert.Equal(2, location.Pos)
+	assert.Equal(4, location.Position().LineNumber)
+	assert.Equal(2, location.LinesPos)
 
 	offsetMatcher := func(m LineMatcher) bool {
 		return m.Offset == 1
@@ -122,7 +123,7 @@ D
 E`, offsetMatcher)
 
 	assert.Equal([]string{"A", "B", "C", "D"}, location.Lines)
-	assert.Equal(2, location.LineNumber)
-	assert.Equal(1, location.Pos)
+	assert.Equal(2, location.Position().LineNumber)
+	assert.Equal(1, location.LinesPos)
 
 }

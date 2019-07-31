@@ -1,4 +1,4 @@
-// Copyright 2015 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,14 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/gohugoio/hugo/config"
+
+	"github.com/gohugoio/hugo/hugofs"
+
 	"github.com/gohugoio/hugo/common/hugio"
 	_errors "github.com/pkg/errors"
 	"github.com/spf13/afero"
+	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 )
@@ -75,17 +80,6 @@ func (filepathBridge) Separator() string {
 
 var fpb filepathBridge
 
-// segmentReplacer replaces some URI-reserved characters in a path segments.
-var segmentReplacer = strings.NewReplacer("/", "-", "#", "-")
-
-// MakeSegment returns a copy of string s that is appropriate for a path
-// segment.  MakeSegment is similar to MakePath but disallows the '/' and
-// '#' characters because of their reserved meaning in URIs.
-func (p *PathSpec) MakeSegment(s string) string {
-	return p.MakePathSanitized(segmentReplacer.Replace(s))
-
-}
-
 // MakePath takes a string with any characters and replace it
 // so the string could be used in a path.
 // It does so by creating a Unicode-sanitized string, with the spaces replaced,
@@ -93,6 +87,13 @@ func (p *PathSpec) MakeSegment(s string) string {
 // E.g. Social Media -> Social-Media
 func (p *PathSpec) MakePath(s string) string {
 	return p.UnicodeSanitize(s)
+}
+
+// MakePathsSanitized applies MakePathSanitized on every item in the slice
+func (p *PathSpec) MakePathsSanitized(paths []string) {
+	for i, path := range paths {
+		paths[i] = p.MakePathSanitized(path)
+	}
 }
 
 // MakePathSanitized creates a Unicode-sanitized string, with the spaces replaced
@@ -157,17 +158,13 @@ func (p *PathSpec) UnicodeSanitize(s string) string {
 
 	if p.RemovePathAccents {
 		// remove accents - see https://blog.golang.org/normalization
-		t := transform.Chain(norm.NFD, transform.RemoveFunc(isMn), norm.NFC)
+		t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
 		result, _, _ = transform.String(t, string(target))
 	} else {
 		result = string(target)
 	}
 
 	return result
-}
-
-func isMn(r rune) bool {
-	return unicode.Is(unicode.Mn, r) // Mn: nonspacing marks
 }
 
 // ReplaceExtension takes a path and an extension, strips the old extension
@@ -177,32 +174,6 @@ func ReplaceExtension(path string, newExt string) string {
 	return f + "." + newExt
 }
 
-// GetFirstThemeDir gets the root directory of the first theme, if there is one.
-// If there is no theme, returns the empty string.
-func (p *PathSpec) GetFirstThemeDir() string {
-	if p.ThemeSet() {
-		return p.AbsPathify(filepath.Join(p.ThemesDir, p.Themes()[0]))
-	}
-	return ""
-}
-
-// GetThemesDir gets the absolute root theme dir path.
-func (p *PathSpec) GetThemesDir() string {
-	if p.ThemeSet() {
-		return p.AbsPathify(p.ThemesDir)
-	}
-	return ""
-}
-
-// GetRelativeThemeDir gets the relative root directory of the current theme, if there is one.
-// If there is no theme, returns the empty string.
-func (p *PathSpec) GetRelativeThemeDir() string {
-	if p.ThemeSet() {
-		return strings.TrimPrefix(filepath.Join(p.ThemesDir, p.Themes()[0]), FilePathSeparator)
-	}
-	return ""
-}
-
 func makePathRelative(inPath string, possibleDirectories ...string) (string, error) {
 
 	for _, currentPath := range possibleDirectories {
@@ -210,7 +181,7 @@ func makePathRelative(inPath string, possibleDirectories ...string) (string, err
 			return strings.TrimPrefix(inPath, currentPath), nil
 		}
 	}
-	return inPath, errors.New("Can't extract relative path, unknown prefix")
+	return inPath, errors.New("can't extract relative path, unknown prefix")
 }
 
 // Should be good enough for Hugo.
@@ -270,6 +241,13 @@ func PathAndExt(in string) (string, string) {
 // the extension including the delmiter, i.e. ".md".
 func FileAndExt(in string) (string, string) {
 	return fileAndExt(in, fpb)
+}
+
+// FileAndExtNoDelimiter takes a path and returns the file and extension separated,
+// the extension excluding the delmiter, e.g "md".
+func FileAndExtNoDelimiter(in string) (string, string) {
+	file, ext := fileAndExt(in, fpb)
+	return file, strings.TrimPrefix(ext, ".")
 }
 
 // Filename takes a path, strips out the extension,
@@ -377,6 +355,107 @@ func prettifyPath(in string, b filepathPathBridge) string {
 	return b.Join(b.Dir(in), name, "index"+ext)
 }
 
+type NamedSlice struct {
+	Name  string
+	Slice []string
+}
+
+func (n NamedSlice) String() string {
+	if len(n.Slice) == 0 {
+		return n.Name
+	}
+	return fmt.Sprintf("%s%s{%s}", n.Name, FilePathSeparator, strings.Join(n.Slice, ","))
+}
+
+func ExtractAndGroupRootPaths(paths []string) []NamedSlice {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	pathsCopy := make([]string, len(paths))
+	hadSlashPrefix := strings.HasPrefix(paths[0], FilePathSeparator)
+
+	for i, p := range paths {
+		pathsCopy[i] = strings.Trim(filepath.ToSlash(p), "/")
+	}
+
+	sort.Strings(pathsCopy)
+
+	pathsParts := make([][]string, len(pathsCopy))
+
+	for i, p := range pathsCopy {
+		pathsParts[i] = strings.Split(p, "/")
+	}
+
+	var groups [][]string
+
+	for i, p1 := range pathsParts {
+		c1 := -1
+
+		for j, p2 := range pathsParts {
+			if i == j {
+				continue
+			}
+
+			c2 := -1
+
+			for i, v := range p1 {
+				if i >= len(p2) {
+					break
+				}
+				if v != p2[i] {
+					break
+				}
+
+				c2 = i
+			}
+
+			if c1 == -1 || (c2 != -1 && c2 < c1) {
+				c1 = c2
+			}
+		}
+
+		if c1 != -1 {
+			groups = append(groups, p1[:c1+1])
+		} else {
+			groups = append(groups, p1)
+		}
+	}
+
+	groupsStr := make([]string, len(groups))
+	for i, g := range groups {
+		groupsStr[i] = strings.Join(g, "/")
+	}
+
+	groupsStr = UniqueStringsSorted(groupsStr)
+
+	var result []NamedSlice
+
+	for _, g := range groupsStr {
+		name := filepath.FromSlash(g)
+		if hadSlashPrefix {
+			name = FilePathSeparator + name
+		}
+		ns := NamedSlice{Name: name}
+		for _, p := range pathsCopy {
+			if !strings.HasPrefix(p, g) {
+				continue
+			}
+
+			p = strings.TrimPrefix(p, g)
+			if p != "" {
+				ns.Slice = append(ns.Slice, p)
+			}
+		}
+
+		ns.Slice = UniqueStrings(ExtractRootPaths(ns.Slice))
+
+		result = append(result, ns)
+	}
+
+	return result
+}
+
 // ExtractRootPaths extracts the root paths from the supplied list of paths.
 // The resulting root path will not contain any file separators, but there
 // may be duplicates.
@@ -404,7 +483,7 @@ func FindCWD() (string, error) {
 	serverFile, err := filepath.Abs(os.Args[0])
 
 	if err != nil {
-		return "", fmt.Errorf("Can't get absolute path for executable: %v", err)
+		return "", fmt.Errorf("can't get absolute path for executable: %v", err)
 	}
 
 	path := filepath.Dir(serverFile)
@@ -423,98 +502,21 @@ func FindCWD() (string, error) {
 	return path, nil
 }
 
-// SymbolicWalk is like filepath.Walk, but it supports the root being a
-// symbolic link. It will still not follow symbolic links deeper down in
-// the file structure.
-func SymbolicWalk(fs afero.Fs, root string, walker filepath.WalkFunc) error {
-
-	// Sanity check
-	if root != "" && len(root) < 4 {
-		return errors.New("Path is too short")
+// SymbolicWalk is like filepath.Walk, but it follows symbolic links.
+func SymbolicWalk(fs afero.Fs, root string, walker hugofs.WalkFunc) error {
+	if _, isOs := fs.(*afero.OsFs); isOs {
+		// Mainly to track symlinks.
+		fs = hugofs.NewBaseFileDecorator(fs)
 	}
 
-	// Handle the root first
-	fileInfo, realPath, err := getRealFileInfo(fs, root)
+	w := hugofs.NewWalkway(hugofs.WalkwayConfig{
+		Fs:     fs,
+		Root:   root,
+		WalkFn: walker,
+	})
 
-	if err != nil {
-		return walker(root, nil, err)
-	}
+	return w.Walk()
 
-	if !fileInfo.IsDir() {
-		return fmt.Errorf("Cannot walk regular file %s", root)
-	}
-
-	if err := walker(realPath, fileInfo, err); err != nil && err != filepath.SkipDir {
-		return err
-	}
-
-	// Some of Hugo's filesystems represents an ordered root folder, i.e. project first, then theme folders.
-	// Make sure that order is preserved. afero.Walk will sort the directories down in the file tree,
-	// but we don't care about that.
-	rootContent, err := readDir(fs, root, false)
-
-	if err != nil {
-		return walker(root, nil, err)
-	}
-
-	for _, fi := range rootContent {
-		if err := afero.Walk(fs, filepath.Join(root, fi.Name()), walker); err != nil {
-			return err
-		}
-	}
-
-	return nil
-
-}
-
-func readDir(fs afero.Fs, dirname string, doSort bool) ([]os.FileInfo, error) {
-	f, err := fs.Open(dirname)
-	if err != nil {
-		return nil, err
-	}
-	list, err := f.Readdir(-1)
-	f.Close()
-	if err != nil {
-		return nil, err
-	}
-	if doSort {
-		sort.Slice(list, func(i, j int) bool { return list[i].Name() < list[j].Name() })
-	}
-	return list, nil
-}
-
-func getRealFileInfo(fs afero.Fs, path string) (os.FileInfo, string, error) {
-	fileInfo, err := LstatIfPossible(fs, path)
-	realPath := path
-
-	if err != nil {
-		return nil, "", err
-	}
-
-	if fileInfo.Mode()&os.ModeSymlink == os.ModeSymlink {
-		link, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil, "", _errors.Wrapf(err, "Cannot read symbolic link %q", path)
-		}
-		fileInfo, err = LstatIfPossible(fs, link)
-		if err != nil {
-			return nil, "", _errors.Wrapf(err, "Cannot stat %q", link)
-		}
-		realPath = link
-	}
-	return fileInfo, realPath, nil
-}
-
-// GetRealPath returns the real file path for the given path, whether it is a
-// symlink or not.
-func GetRealPath(fs afero.Fs, path string) (string, error) {
-	_, realPath, err := getRealFileInfo(fs, path)
-
-	if err != nil {
-		return "", err
-	}
-
-	return realPath, nil
 }
 
 // LstatIfPossible can be used to call Lstat if possible, else Stat.
@@ -561,18 +563,72 @@ func OpenFilesForWriting(fs afero.Fs, filenames ...string) (io.WriteCloser, erro
 func OpenFileForWriting(fs afero.Fs, filename string) (afero.File, error) {
 	filename = filepath.Clean(filename)
 	// Create will truncate if file already exists.
+	// os.Create will create any new files with mode 0666 (before umask).
 	f, err := fs.Create(filename)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
-		if err = fs.MkdirAll(filepath.Dir(filename), 0777); err != nil { // rwx, rw, r before umask
+		if err = fs.MkdirAll(filepath.Dir(filename), 0777); err != nil { //  before umask
 			return nil, err
 		}
 		f, err = fs.Create(filename)
 	}
 
 	return f, err
+}
+
+// GetCacheDir returns a cache dir from the given filesystem and config.
+// The dir will be created if it does not exist.
+func GetCacheDir(fs afero.Fs, cfg config.Provider) (string, error) {
+	cacheDir := getCacheDir(cfg)
+	if cacheDir != "" {
+		exists, err := DirExists(cacheDir, fs)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			err := fs.MkdirAll(cacheDir, 0777) // Before umask
+			if err != nil {
+				return "", _errors.Wrap(err, "failed to create cache dir")
+			}
+		}
+		return cacheDir, nil
+	}
+
+	// Fall back to a cache in /tmp.
+	return GetTempDir("hugo_cache", fs), nil
+
+}
+
+func getCacheDir(cfg config.Provider) string {
+	// Always use the cacheDir config if set.
+	cacheDir := cfg.GetString("cacheDir")
+	if len(cacheDir) > 1 {
+		return addTrailingFileSeparator(cacheDir)
+	}
+
+	// Both of these are fairly distinctive OS env keys used by Netlify.
+	if os.Getenv("DEPLOY_PRIME_URL") != "" && os.Getenv("PULL_REQUEST") != "" {
+		// Netlify's cache behaviour is not documented, the currently best example
+		// is this project:
+		// https://github.com/philhawksworth/content-shards/blob/master/gulpfile.js
+		return "/opt/build/cache/hugo_cache/"
+
+	}
+
+	// This will fall back to an hugo_cache folder in the tmp dir, which should work fine for most CI
+	// providers. See this for a working CircleCI setup:
+	// https://github.com/bep/hugo-sass-test/blob/6c3960a8f4b90e8938228688bc49bdcdd6b2d99e/.circleci/config.yml
+	// If not, they can set the HUGO_CACHEDIR environment variable or cacheDir config key.
+	return ""
+}
+
+func addTrailingFileSeparator(s string) string {
+	if !strings.HasSuffix(s, FilePathSeparator) {
+		s = s + FilePathSeparator
+	}
+	return s
 }
 
 // GetTempDir returns a temporary directory with the given sub path.

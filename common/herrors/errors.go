@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	_errors "github.com/pkg/errors"
 )
@@ -46,8 +47,18 @@ func FprintStackTrace(w io.Writer, err error) {
 	}
 }
 
+// Recover is a helper function that can be used to capture panics.
+// Put this at the top of a method/function that crashes in a template:
+//     defer herrors.Recover()
+func Recover() {
+	if r := recover(); r != nil {
+		fmt.Println("stacktrace from panic: \n" + string(debug.Stack()))
+	}
+
+}
+
 // ErrFeatureNotAvailable denotes that a feature is unavailable.
 //
 // We will, at least to begin with, make some Hugo features (SCSS with libsass) optional,
 // and this error is used to signal those situations.
-var ErrFeatureNotAvailable = errors.New("this feature is not available in your current Hugo version")
+var ErrFeatureNotAvailable = errors.New("this feature is not available in your current Hugo version, see https://goo.gl/YMrWcn for more information")

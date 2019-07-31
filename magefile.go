@@ -15,16 +15,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gohugoio/hugo/codegen"
+	"github.com/gohugoio/hugo/resources/page/page_generate"
+
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
 const (
 	packageName  = "github.com/gohugoio/hugo"
-	noGitLdflags = "-X $PACKAGE/hugolib.BuildDate=$BUILD_DATE"
+	noGitLdflags = "-X $PACKAGE/common/hugo.buildDate=$BUILD_DATE"
 )
 
-var ldflags = "-X $PACKAGE/hugolib.CommitHash=$COMMIT_HASH -X $PACKAGE/hugolib.BuildDate=$BUILD_DATE"
+var ldflags = "-X $PACKAGE/common/hugo.commitHash=$COMMIT_HASH -X $PACKAGE/common/hugo.buildDate=$BUILD_DATE"
 
 // allow user to override go executable by running as GOEXE=xxx make ... on unix-like systems
 var goexe = "go"
@@ -64,7 +67,38 @@ func flagEnv() map[string]string {
 }
 
 func Generate() error {
-	return sh.RunWith(flagEnv(), goexe, "generate", path.Join(packageName, "tpl/tplimpl/embedded/generate"))
+	generatorPackages := []string{
+		"tpl/tplimpl/embedded/generate",
+		//"resources/page/generate",
+	}
+
+	for _, pkg := range generatorPackages {
+		if err := sh.RunWith(flagEnv(), goexe, "generate", path.Join(packageName, pkg)); err != nil {
+			return err
+		}
+	}
+
+	dir, _ := os.Getwd()
+	c := codegen.NewInspector(dir)
+
+	if err := page_generate.Generate(c); err != nil {
+		return err
+	}
+
+	goFmtPatterns := []string{
+		// TODO(bep) check: stat ./resources/page/*autogen*: no such file or directory
+		"./resources/page/page_marshaljson.autogen.go",
+		"./resources/page/page_wrappers.autogen.go",
+		"./resources/page/zero_file.autogen.go",
+	}
+
+	for _, pattern := range goFmtPatterns {
+		if err := sh.Run("gofmt", "-w", filepath.FromSlash(pattern)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Build hugo without git info
@@ -109,20 +143,31 @@ func Check() {
 	mg.Deps(TestRace)
 }
 
+func testGoFlags() string {
+	if isCI() {
+		return ""
+	}
+
+	return "-test.short"
+}
+
 // Run tests in 32-bit mode
 // Note that we don't run with the extended tag. Currently not supported in 32 bit.
 func Test386() error {
-	return sh.RunWith(map[string]string{"GOARCH": "386"}, goexe, "test", "./...")
+	env := map[string]string{"GOARCH": "386", "GOFLAGS": testGoFlags()}
+	return sh.RunWith(env, goexe, "test", "./...")
 }
 
 // Run tests
 func Test() error {
-	return sh.Run(goexe, "test", "./...", "-tags", buildTags())
+	env := map[string]string{"GOFLAGS": testGoFlags()}
+	return sh.RunWith(env, goexe, "test", "./...", "-tags", buildTags())
 }
 
 // Run tests with race detector
 func TestRace() error {
-	return sh.Run(goexe, "test", "-race", "./...", "-tags", buildTags())
+	env := map[string]string{"GOFLAGS": testGoFlags()}
+	return sh.RunWith(env, goexe, "test", "-race", "./...", "-tags", buildTags())
 }
 
 // Run gofmt linter
@@ -260,6 +305,10 @@ func TestCoverHTML() error {
 
 func isGoLatest() bool {
 	return strings.Contains(runtime.Version(), "1.11")
+}
+
+func isCI() bool {
+	return os.Getenv("CI") != ""
 }
 
 func buildTags() string {

@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -276,6 +276,7 @@ func TestFirst(t *testing.T) {
 
 func TestIn(t *testing.T) {
 	t.Parallel()
+	assert := require.New(t)
 
 	ns := New(&deps.Deps{})
 
@@ -302,42 +303,53 @@ func TestIn(t *testing.T) {
 		{"this substring should be found", "substring", true},
 		{"this substring should not be found", "subseastring", false},
 		{nil, "foo", false},
+		// Pointers
+		{pagesPtr{p1, p2, p3, p2}, p2, true},
+		{pagesPtr{p1, p2, p3, p2}, p4, false},
+		// Structs
+		{pagesVals{p3v, p2v, p3v, p2v}, p2v, true},
+		{pagesVals{p3v, p2v, p3v, p2v}, p4v, false},
 	} {
 
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
-		result := ns.In(test.l1, test.l2)
-		assert.Equal(t, test.expect, result, errMsg)
+		result, err := ns.In(test.l1, test.l2)
+		assert.NoError(err)
+		assert.Equal(test.expect, result, errMsg)
 	}
+
+	// Slices are not comparable
+	_, err := ns.In([]string{"a", "b"}, []string{"a", "b"})
+	assert.Error(err)
 }
 
-type page struct {
+type testPage struct {
 	Title string
 }
 
-func (p page) String() string {
+func (p testPage) String() string {
 	return "p-" + p.Title
 }
 
-type pagesPtr []*page
-type pagesVals []page
+type pagesPtr []*testPage
+type pagesVals []testPage
+
+var (
+	p1 = &testPage{"A"}
+	p2 = &testPage{"B"}
+	p3 = &testPage{"C"}
+	p4 = &testPage{"D"}
+
+	p1v = testPage{"A"}
+	p2v = testPage{"B"}
+	p3v = testPage{"C"}
+	p4v = testPage{"D"}
+)
 
 func TestIntersect(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
-
-	var (
-		p1 = &page{"A"}
-		p2 = &page{"B"}
-		p3 = &page{"C"}
-		p4 = &page{"D"}
-
-		p1v = page{"A"}
-		p2v = page{"B"}
-		p3v = page{"C"}
-		p4v = page{"D"}
-	)
 
 	for i, test := range []struct {
 		l1, l2 interface{}
@@ -671,18 +683,6 @@ func TestUnion(t *testing.T) {
 
 	ns := New(&deps.Deps{})
 
-	var (
-		p1 = &page{"A"}
-		p2 = &page{"B"}
-		//		p3 = &page{"C"}
-		p4 = &page{"D"}
-
-		p1v = page{"A"}
-		//p2v = page{"B"}
-		p3v = page{"C"}
-		//p4v = page{"D"}
-	)
-
 	for i, test := range []struct {
 		l1     interface{}
 		l2     interface{}
@@ -786,7 +786,15 @@ func TestUniq(t *testing.T) {
 		{[]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
 		{[4]int{1, 2, 3, 2}, []int{1, 2, 3}, false},
 		{nil, make([]interface{}, 0), false},
-		// should-errors
+		// Pointers
+		{pagesPtr{p1, p2, p3, p2}, pagesPtr{p1, p2, p3}, false},
+		{pagesPtr{}, pagesPtr{}, false},
+		// Structs
+		{pagesVals{p3v, p2v, p3v, p2v}, pagesVals{p3v, p2v}, false},
+
+		// should fail
+		// uncomparable types
+		{[]map[string]int{{"K1": 1}}, []map[string]int{{"K2": 2}, {"K2": 2}}, true},
 		{1, 1, true},
 		{"foo", "fo", true},
 	} {
@@ -808,6 +816,10 @@ func (x *TstX) TstRp() string {
 }
 
 func (x TstX) TstRv() string {
+	return "r" + x.B
+}
+
+func (x TstX) TstRv2() string {
 	return "r" + x.B
 }
 
@@ -840,6 +852,33 @@ func (x TstX) String() string {
 type TstX struct {
 	A, B       string
 	unexported string
+}
+
+type TstXIHolder struct {
+	XI TstXI
+}
+
+// Partially implemented by the TstX struct.
+type TstXI interface {
+	TstRv2() string
+}
+
+func ToTstXIs(slice interface{}) []TstXI {
+	s := reflect.ValueOf(slice)
+	if s.Kind() != reflect.Slice {
+		return nil
+	}
+	tis := make([]TstXI, s.Len())
+
+	for i := 0; i < s.Len(); i++ {
+		tsti, ok := s.Index(i).Interface().(TstXI)
+		if !ok {
+			return nil
+		}
+		tis[i] = tsti
+	}
+
+	return tis
 }
 
 func newDeps(cfg config.Provider) *deps.Deps {

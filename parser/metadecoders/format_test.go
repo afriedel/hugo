@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gohugoio/hugo/media"
+
 	"github.com/gohugoio/hugo/parser/pageparser"
 
 	"github.com/stretchr/testify/require"
@@ -32,11 +34,27 @@ func TestFormatFromString(t *testing.T) {
 		{"yaml", YAML},
 		{"yml", YAML},
 		{"toml", TOML},
+		{"config.toml", TOML},
 		{"tOMl", TOML},
 		{"org", ORG},
 		{"foo", ""},
 	} {
 		assert.Equal(test.expect, FormatFromString(test.s), fmt.Sprintf("t%d", i))
+	}
+}
+
+func TestFormatFromMediaType(t *testing.T) {
+	assert := require.New(t)
+	for i, test := range []struct {
+		m      media.Type
+		expect Format
+	}{
+		{media.JSONType, JSON},
+		{media.YAMLType, YAML},
+		{media.TOMLType, TOML},
+		{media.CalendarType, ""},
+	} {
+		assert.Equal(test.expect, FormatFromMediaType(test.m), fmt.Sprintf("t%d", i))
 	}
 }
 
@@ -53,5 +71,31 @@ func TestFormatFromFrontMatterType(t *testing.T) {
 		{pageparser.TypeIgnore, ""},
 	} {
 		assert.Equal(test.expect, FormatFromFrontMatterType(test.typ), fmt.Sprintf("t%d", i))
+	}
+}
+
+func TestFormatFromContentString(t *testing.T) {
+	t.Parallel()
+	assert := require.New(t)
+
+	for i, test := range []struct {
+		data   string
+		expect interface{}
+	}{
+		{`foo = "bar"`, TOML},
+		{`   foo = "bar"`, TOML},
+		{`foo="bar"`, TOML},
+		{`foo: "bar"`, YAML},
+		{`foo:"bar"`, YAML},
+		{`{ "foo": "bar"`, JSON},
+		{`a,b,c"`, CSV},
+		{`asdfasdf`, Format("")},
+		{``, Format("")},
+	} {
+		errMsg := fmt.Sprintf("[%d] %s", i, test.data)
+
+		result := Default.FormatFromContentString(test.data)
+
+		assert.Equal(test.expect, result, errMsg)
 	}
 }

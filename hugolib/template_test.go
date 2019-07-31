@@ -25,7 +25,6 @@ import (
 )
 
 func TestTemplateLookupOrder(t *testing.T) {
-	t.Parallel()
 	var (
 		fs  *hugofs.Fs
 		cfg *viper.Viper
@@ -193,22 +192,119 @@ func TestTemplateLookupOrder(t *testing.T) {
 		},
 	} {
 
-		cfg, fs = newTestCfg()
-		th = testHelper{cfg, fs, t}
+		this := this
+		t.Run(this.name, func(t *testing.T) {
+			// TODO(bep) there are some function vars need to pull down here to enable => t.Parallel()
+			cfg, fs = newTestCfg()
+			th = testHelper{cfg, fs, t}
 
-		for i := 1; i <= 3; i++ {
-			writeSource(t, fs, filepath.Join("content", fmt.Sprintf("sect%d", i), fmt.Sprintf("page%d.md", i)), `---
+			for i := 1; i <= 3; i++ {
+				writeSource(t, fs, filepath.Join("content", fmt.Sprintf("sect%d", i), fmt.Sprintf("page%d.md", i)), `---
 title: Template test
 ---
 Some content
 `)
-		}
+			}
 
-		this.setup(t)
+			this.setup(t)
 
-		buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
-		t.Log(this.name)
-		this.assert(t)
+			buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})
+			//helpers.PrintFs(s.BaseFs.Layouts.Fs, "", os.Stdout)
+			this.assert(t)
+		})
 
 	}
+}
+
+// https://github.com/gohugoio/hugo/issues/4895
+func TestTemplateBOM(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithSimpleConfigFile()
+	bom := "\ufeff"
+
+	b.WithTemplatesAdded(
+		"_default/baseof.html", bom+`
+		Base: {{ block "main" . }}base main{{ end }}`,
+		"_default/single.html", bom+`{{ define "main" }}Hi!?{{ end }}`)
+
+	b.WithContent("page.md", `---
+title: "Page"
+---
+
+Page Content
+`)
+
+	b.CreateSites().Build(BuildCfg{})
+
+	b.AssertFileContent("public/page/index.html", "Base: Hi!?")
+
+}
+
+func TestTemplateFuncs(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithDefaultMultiSiteConfig()
+
+	homeTpl := `Site: {{ site.Language.Lang }} / {{ .Site.Language.Lang }} / {{ site.BaseURL }}
+Sites: {{ site.Sites.First.Home.Language.Lang }}
+Hugo: {{ hugo.Generator }}
+`
+
+	b.WithTemplatesAdded(
+		"index.html", homeTpl,
+		"index.fr.html", homeTpl,
+	)
+
+	b.CreateSites().Build(BuildCfg{})
+
+	b.AssertFileContent("public/en/index.html",
+		"Site: en / en / http://example.com/blog",
+		"Sites: en",
+		"Hugo: <meta name=\"generator\" content=\"Hugo")
+	b.AssertFileContent("public/fr/index.html",
+		"Site: fr / fr / http://example.com/blog",
+		"Sites: en",
+		"Hugo: <meta name=\"generator\" content=\"Hugo",
+	)
+
+}
+
+func TestPartialWithReturn(t *testing.T) {
+
+	b := newTestSitesBuilder(t).WithSimpleConfigFile()
+
+	b.WithTemplatesAdded(
+		"index.html", `
+Test Partials With Return Values:
+
+add42: 50: {{ partial "add42.tpl" 8 }}
+dollarContext: 60: {{ partial "dollarContext.tpl" 18 }}
+adder: 70: {{ partial "dict.tpl" (dict "adder" 28) }}
+complex: 80: {{ partial "complex.tpl" 38 }}
+`,
+		"partials/add42.tpl", `
+		{{ $v := add . 42 }}
+		{{ return $v }}
+		`,
+		"partials/dollarContext.tpl", `
+{{ $v := add $ 42 }}
+{{ return $v }}
+`,
+		"partials/dict.tpl", `
+{{ $v := add $.adder 42 }}
+{{ return $v }}
+`,
+		"partials/complex.tpl", `
+{{ return add . 42 }}
+`,
+	)
+
+	b.CreateSites().Build(BuildCfg{})
+
+	b.AssertFileContent("public/index.html",
+		"add42: 50: 50",
+		"dollarContext: 60: 60",
+		"adder: 70: 70",
+		"complex: 80: 80",
+	)
+
 }

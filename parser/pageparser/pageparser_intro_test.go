@@ -37,8 +37,9 @@ var (
 	tstFrontMatterYAMLCRLF = nti(TypeFrontMatterYAML, "foo: \"bar\"\r\n")
 	tstFrontMatterJSON     = nti(TypeFrontMatterJSON, tstJSON+"\r\n")
 	tstSomeText            = nti(tText, "\nSome text.\n")
-	tstSummaryDivider      = nti(TypeLeadSummaryDivider, "<!--more-->")
+	tstSummaryDivider      = nti(TypeLeadSummaryDivider, "<!--more-->\n")
 	tstHtmlStart           = nti(TypeHTMLStart, "<")
+	tstNewline             = nti(tText, "\n")
 
 	tstORG = `
 #+TITLE: T1
@@ -59,14 +60,20 @@ var frontMatterTests = []lexerTest{
 	{"No front matter", "\nSome text.\n", []Item{tstSomeText, tstEOF}},
 	{"YAML front matter", "---\nfoo: \"bar\"\n---\n\nSome text.\n", []Item{tstFrontMatterYAML, tstSomeText, tstEOF}},
 	{"YAML empty front matter", "---\n---\n\nSome text.\n", []Item{nti(TypeFrontMatterYAML, ""), tstSomeText, tstEOF}},
-	{"YAML commented out front matter", "<!--\n---\nfoo: \"bar\"\n---\n-->\nSome text.\n", []Item{nti(TypeHTMLComment, "<!--\n---\nfoo: \"bar\"\n---\n-->"), tstSomeText, tstEOF}},
+	{"YAML commented out front matter", "<!--\n---\nfoo: \"bar\"\n---\n-->\nSome text.\n", []Item{nti(TypeIgnore, "<!--\n"), tstFrontMatterYAML, nti(TypeIgnore, "-->"), tstSomeText, tstEOF}},
+	{"YAML commented out front matter, no end", "<!--\n---\nfoo: \"bar\"\n---\nSome text.\n", []Item{nti(TypeIgnore, "<!--\n"), tstFrontMatterYAML, nti(tError, "starting HTML comment with no end")}},
 	// Note that we keep all bytes as they are, but we need to handle CRLF
 	{"YAML front matter CRLF", "---\r\nfoo: \"bar\"\r\n---\n\nSome text.\n", []Item{tstFrontMatterYAMLCRLF, tstSomeText, tstEOF}},
 	{"TOML front matter", "+++\nfoo = \"bar\"\n+++\n\nSome text.\n", []Item{tstFrontMatterTOML, tstSomeText, tstEOF}},
 	{"JSON front matter", tstJSON + "\r\n\nSome text.\n", []Item{tstFrontMatterJSON, tstSomeText, tstEOF}},
 	{"ORG front matter", tstORG + "\nSome text.\n", []Item{tstFrontMatterORG, tstSomeText, tstEOF}},
-	{"Summary divider ORG", tstORG + "\nSome text.\n# more\nSome text.\n", []Item{tstFrontMatterORG, tstSomeText, nti(TypeLeadSummaryDivider, "# more"), tstSomeText, tstEOF}},
-	{"Summary divider", "+++\nfoo = \"bar\"\n+++\n\nSome text.\n<!--more-->\nSome text.\n", []Item{tstFrontMatterTOML, tstSomeText, tstSummaryDivider, tstSomeText, tstEOF}},
+	{"Summary divider ORG", tstORG + "\nSome text.\n# more\nSome text.\n", []Item{tstFrontMatterORG, tstSomeText, nti(TypeLeadSummaryDivider, "# more\n"), nti(tText, "Some text.\n"), tstEOF}},
+	{"Summary divider", "+++\nfoo = \"bar\"\n+++\n\nSome text.\n<!--more-->\nSome text.\n", []Item{tstFrontMatterTOML, tstSomeText, tstSummaryDivider, nti(tText, "Some text.\n"), tstEOF}},
+	{"Summary divider same line", "+++\nfoo = \"bar\"\n+++\n\nSome text.<!--more-->Some text.\n", []Item{tstFrontMatterTOML, nti(tText, "\nSome text."), nti(TypeLeadSummaryDivider, "<!--more-->"), nti(tText, "Some text.\n"), tstEOF}},
+	// https://github.com/gohugoio/hugo/issues/5402
+	{"Summary and shortcode, no space", "+++\nfoo = \"bar\"\n+++\n\nSome text.\n<!--more-->{{< sc1 >}}\nSome text.\n", []Item{tstFrontMatterTOML, tstSomeText, nti(TypeLeadSummaryDivider, "<!--more-->"), tstLeftNoMD, tstSC1, tstRightNoMD, tstSomeText, tstEOF}},
+	// https://github.com/gohugoio/hugo/issues/5464
+	{"Summary and shortcode only", "+++\nfoo = \"bar\"\n+++\n{{< sc1 >}}\n<!--more-->\n{{< sc2 >}}", []Item{tstFrontMatterTOML, tstLeftNoMD, tstSC1, tstRightNoMD, tstNewline, tstSummaryDivider, tstLeftNoMD, tstSC2, tstRightNoMD, tstEOF}},
 }
 
 func TestFrontMatter(t *testing.T) {
@@ -81,8 +88,8 @@ func TestFrontMatter(t *testing.T) {
 	}
 }
 
-func collect(input []byte, skipFrontMatter bool, stateStart stateFunc) (items []Item) {
-	l := newPageLexer(input, 0, stateStart)
+func collectWithConfig(input []byte, skipFrontMatter bool, stateStart stateFunc, cfg Config) (items []Item) {
+	l := newPageLexer(input, stateStart, cfg)
 	l.run()
 	t := l.newIterator()
 
@@ -94,6 +101,13 @@ func collect(input []byte, skipFrontMatter bool, stateStart stateFunc) (items []
 		}
 	}
 	return
+}
+
+func collect(input []byte, skipFrontMatter bool, stateStart stateFunc) (items []Item) {
+	var cfg Config
+
+	return collectWithConfig(input, skipFrontMatter, stateStart, cfg)
+
 }
 
 // no positional checking, for now ...

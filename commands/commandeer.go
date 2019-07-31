@@ -1,4 +1,4 @@
-// Copyright 2018 The Hugo Authors. All rights reserved.
+// Copyright 2019 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,18 +16,22 @@ package commands
 import (
 	"bytes"
 	"errors"
+	"sync"
 
-	"github.com/gohugoio/hugo/common/herrors"
+	"golang.org/x/sync/semaphore"
+
+	"github.com/gohugoio/hugo/modules"
 
 	"io/ioutil"
+
+	"github.com/gohugoio/hugo/common/herrors"
+	"github.com/gohugoio/hugo/common/hugo"
 
 	jww "github.com/spf13/jwalterweatherman"
 
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/gohugoio/hugo/common/loggers"
@@ -87,6 +91,8 @@ type commandeer struct {
 	configured bool
 	paused     bool
 
+	fullRebuildSem *semaphore.Weighted
+
 	// Any error from the last build.
 	buildErr error
 }
@@ -105,7 +111,7 @@ func (c *commandeer) getErrorWithContext() interface{} {
 	m := make(map[string]interface{})
 
 	m["Error"] = errors.New(removeErrorPrefixFromLog(c.logger.Errors()))
-	m["Version"] = hugoVersionString()
+	m["Version"] = hugo.BuildVersionString()
 
 	fe := herrors.UnwrapErrorWithFileContext(c.buildErr)
 	if fe != nil {
@@ -142,7 +148,7 @@ func newCommandeer(mustHaveConfigFile, running bool, h *hugoBuilderCommon, f fla
 		// The time value used is tested with mass content replacements in a fairly big Hugo site.
 		// It is better to wait for some seconds in those cases rather than get flooded
 		// with rebuilds.
-		rebuildDebouncer, _, _ = debounce.New(4 * time.Second)
+		rebuildDebouncer = debounce.New(4 * time.Second)
 	}
 
 	c := &commandeer{
@@ -152,6 +158,7 @@ func newCommandeer(mustHaveConfigFile, running bool, h *hugoBuilderCommon, f fla
 		doWithCommandeer:    doWithCommandeer,
 		visitedURLs:         types.NewEvictingStringQueue(10),
 		debounce:            rebuildDebouncer,
+		fullRebuildSem:      semaphore.NewWeighted(1),
 		// This will be replaced later, but we need something to log to before the configuration is read.
 		logger: loggers.NewLogger(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, running),
 	}
@@ -248,6 +255,8 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		sourceFs = c.DepsCfg.Fs.Source
 	}
 
+	environment := c.h.getEnvironment(running)
+
 	doWithConfig := func(cfg config.Provider) error {
 
 		if c.ftch != nil {
@@ -255,7 +264,7 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		}
 
 		cfg.Set("workingDir", dir)
-
+		cfg.Set("environment", environment)
 		return nil
 	}
 
@@ -268,8 +277,19 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		return err
 	}
 
+	configPath := c.h.source
+	if configPath == "" {
+		configPath = dir
+	}
 	config, configFiles, err := hugolib.LoadConfig(
-		hugolib.ConfigSourceDescriptor{Fs: sourceFs, Path: c.h.source, WorkingDir: dir, Filename: c.h.cfgFile},
+		hugolib.ConfigSourceDescriptor{
+			Fs:           sourceFs,
+			Path:         configPath,
+			WorkingDir:   dir,
+			Filename:     c.h.cfgFile,
+			AbsConfigDir: c.h.getConfigDir(dir),
+			Environ:      os.Environ(),
+			Environment:  environment},
 		doWithCommandeer,
 		doWithConfig)
 
@@ -277,7 +297,7 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		if mustHaveConfigFile {
 			return err
 		}
-		if err != hugolib.ErrNoConfigFile {
+		if err != hugolib.ErrNoConfigFile && !modules.IsNotExist(err) {
 			return err
 		}
 
@@ -291,7 +311,7 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 	}
 
 	// Set some commonly used flags
-	c.doLiveReload = !c.h.buildWatch && !c.Cfg.GetBool("disableLiveReload")
+	c.doLiveReload = running && !c.Cfg.GetBool("disableLiveReload")
 	c.fastRenderMode = c.doLiveReload && !c.Cfg.GetBool("disableFastRender")
 	c.showErrorInBrowser = c.doLiveReload && !c.Cfg.GetBool("disableBrowserError")
 
@@ -338,10 +358,18 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 				// to make that decision.
 				irrelevantRe: regexp.MustCompile(`\.map$`),
 			}
+
 			changeDetector.PrepareNew()
 			fs.Destination = hugofs.NewHashingFs(fs.Destination, changeDetector)
 			c.changeDetector = changeDetector
 		}
+
+		if c.Cfg.GetBool("logPathWarnings") {
+			fs.Destination = hugofs.NewCreateCountingFs(fs.Destination)
+		}
+
+		// To debug hard-to-find path issues.
+		//fs.Destination = hugofs.NewStacktracerFs(fs.Destination, `fr/fr`)
 
 		err = c.initFs(fs)
 		if err != nil {
@@ -359,37 +387,13 @@ func (c *commandeer) loadConfig(mustHaveConfigFile, running bool) error {
 		return err
 	}
 
-	cacheDir := config.GetString("cacheDir")
-	if cacheDir != "" {
-		if helpers.FilePathSeparator != cacheDir[len(cacheDir)-1:] {
-			cacheDir = cacheDir + helpers.FilePathSeparator
-		}
-		isDir, err := helpers.DirExists(cacheDir, sourceFs)
-		checkErr(cfg.Logger, err)
-		if !isDir {
-			mkdir(cacheDir)
-		}
-		config.Set("cacheDir", cacheDir)
-	} else {
-		config.Set("cacheDir", helpers.GetTempDir("hugo_cache", sourceFs))
+	cacheDir, err := helpers.GetCacheDir(sourceFs, config)
+	if err != nil {
+		return err
 	}
+	config.Set("cacheDir", cacheDir)
 
 	cfg.Logger.INFO.Println("Using config file:", config.ConfigFileUsed())
-
-	themeDir := c.hugo.PathSpec.GetFirstThemeDir()
-	if themeDir != "" {
-		if _, err := sourceFs.Stat(themeDir); os.IsNotExist(err) {
-			return newSystemError("Unable to find theme Directory:", themeDir)
-		}
-	}
-
-	dir, themeVersionMismatch, minVersion := c.isThemeVsHugoVersionMismatch(sourceFs)
-
-	if themeVersionMismatch {
-		name := filepath.Base(dir)
-		cfg.Logger.ERROR.Printf("%s theme does not support Hugo version %s. Minimum version required is %s\n",
-			strings.ToUpper(name), helpers.CurrentHugoVersion.ReleaseVersion(), minVersion)
-	}
 
 	return nil
 

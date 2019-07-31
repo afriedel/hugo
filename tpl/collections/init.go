@@ -39,6 +39,20 @@ func init() {
 			[][2]string{},
 		)
 
+		ns.AddMethodMapping(ctx.Complement,
+			[]string{"complement"},
+			[][2]string{
+				{`{{ slice "a" "b" "c" "d" "e" "f" | complement (slice "b" "c") (slice "d" "e")  }}`, `[a f]`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.SymDiff,
+			[]string{"symdiff"},
+			[][2]string{
+				{`{{ slice 1 2 3 | symdiff (slice 3 4) }}`, `[1 2 4]`},
+			},
+		)
+
 		ns.AddMethodMapping(ctx.Delimit,
 			[]string{"delimit"},
 			[][2]string{
@@ -166,6 +180,16 @@ func init() {
 			[]string{"uniq"},
 			[][2]string{
 				{`{{ slice 1 2 3 2 | uniq }}`, `[1 2 3]`},
+			},
+		)
+
+		ns.AddMethodMapping(ctx.Merge,
+			[]string{"merge"},
+			[][2]string{
+				{`{{ dict "title" "Hugo Rocks!" | collections.Merge (dict "title" "Default Title" "description" "Yes, Hugo Rocks!") | sort }}`,
+					`[Yes, Hugo Rocks! Hugo Rocks!]`},
+				{`{{  merge (dict "title" "Default Title" "description" "Yes, Hugo Rocks!") (dict "title" "Hugo Rocks!") | sort }}`,
+					`[Yes, Hugo Rocks! Hugo Rocks!]`},
 			},
 		)
 
